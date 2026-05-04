@@ -1,0 +1,145 @@
+/**
+ * /api/profile  —  list + create/upsert profiles.
+ *
+ * Body shape mirrors the on-disk profile JSON validated by `profile-set.ts`:
+ *   { slug, name, budget_min?, budget_max?, beds_min?, beds_max?,
+ *     must_have?, nice_to_have?, deal_breakers?, vibes?, commute?,
+ *     preferred_areas?, notes? }
+ *
+ * `profile-set.ts` keeps its schema private to that module, so we mirror it
+ * here. TODO(integrator): export `profileFileSchema` from `profile-set.ts` and
+ * import it here so the contract is one-definition.
+ */
+
+import { z } from 'zod'
+import { sql } from 'drizzle-orm'
+import { profiles } from '@/db/schema'
+import { getDb } from '@/lib/db'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
+const commuteEntrySchema = z.object({
+  to: z.string(),
+  lat: z.number().nullable().optional(),
+  lng: z.number().nullable().optional(),
+  max_minutes: z.number(),
+  modes: z.array(z.enum(['subway', 'walk', 'bike'])),
+})
+
+// Body schema for POST/PUT. Stricter than the on-disk schema (no FILL_ME, no
+// nullable required fields) — the API is for the setup UI, which only sends
+// fully-filled profiles.
+const profileBodySchema = z.object({
+  slug: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/, 'slug must be lowercase a-z, 0-9, or -'),
+  name: z.string().min(1).max(128),
+  budget_min: z.number().int().nonnegative().nullable().optional(),
+  budget_max: z.number().int().nonnegative().nullable().optional(),
+  beds_min: z.number().nonnegative().nullable().optional(),
+  beds_max: z.number().nonnegative().nullable().optional(),
+  must_have: z.array(z.string()).optional(),
+  nice_to_have: z.array(z.string()).optional(),
+  deal_breakers: z.array(z.string()).optional(),
+  vibes: z.record(z.string(), z.number()).optional(),
+  commute: z.array(commuteEntrySchema).optional(),
+  preferred_areas: z.array(z.string()).optional(),
+  notes: z.string().nullable().optional(),
+})
+
+export type ProfileBody = z.infer<typeof profileBodySchema>
+
+function bodyToInsert(body: ProfileBody) {
+  // The schema's `commute` jsonb column types lat/lng as `number | undefined`,
+  // not `number | null`. Drop nulls explicitly so the insert typechecks.
+  const commute = (body.commute ?? []).map((c) => {
+    const out: { to: string; lat?: number; lng?: number; max_minutes: number; modes: ('subway' | 'walk' | 'bike')[] } = {
+      to: c.to,
+      max_minutes: c.max_minutes,
+      modes: c.modes,
+    }
+    if (c.lat != null) out.lat = c.lat
+    if (c.lng != null) out.lng = c.lng
+    return out
+  })
+
+  return {
+    slug: body.slug,
+    name: body.name,
+    budget_min: body.budget_min ?? null,
+    budget_max: body.budget_max ?? null,
+    // numeric() drizzle columns accept string. Coerce to keep TS happy.
+    beds_min: body.beds_min != null ? String(body.beds_min) : null,
+    beds_max: body.beds_max != null ? String(body.beds_max) : null,
+    must_have: body.must_have ?? [],
+    nice_to_have: body.nice_to_have ?? [],
+    deal_breakers: body.deal_breakers ?? [],
+    vibes: body.vibes ?? {},
+    commute,
+    preferred_areas: body.preferred_areas ?? [],
+    notes: body.notes ?? null,
+    raw_jsonb: body as unknown,
+  }
+}
+
+export async function GET() {
+  try {
+    const db = getDb()
+    const rows = await db.select().from(profiles).orderBy(profiles.slug)
+    return Response.json({ profiles: rows }, { status: 200 })
+  } catch (err) {
+    console.error('[api/profile] GET failed', err)
+    return Response.json(
+      { error: 'db_error', message: (err as Error).message },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: Request) {
+  let body: ProfileBody
+  try {
+    const raw = (await req.json()) as unknown
+    body = profileBodySchema.parse(raw)
+  } catch (err) {
+    return Response.json(
+      { error: 'bad_request', message: err instanceof Error ? err.message : 'invalid body' },
+      { status: 400 }
+    )
+  }
+
+  try {
+    const db = getDb()
+    const insert = bodyToInsert(body)
+    const [row] = await db
+      .insert(profiles)
+      .values(insert)
+      .onConflictDoUpdate({
+        target: profiles.slug,
+        set: {
+          name: sql`excluded.name`,
+          budget_min: sql`excluded.budget_min`,
+          budget_max: sql`excluded.budget_max`,
+          beds_min: sql`excluded.beds_min`,
+          beds_max: sql`excluded.beds_max`,
+          must_have: sql`excluded.must_have`,
+          nice_to_have: sql`excluded.nice_to_have`,
+          deal_breakers: sql`excluded.deal_breakers`,
+          vibes: sql`excluded.vibes`,
+          commute: sql`excluded.commute`,
+          preferred_areas: sql`excluded.preferred_areas`,
+          notes: sql`excluded.notes`,
+          raw_jsonb: sql`excluded.raw_jsonb`,
+        },
+      })
+      .returning()
+    return Response.json({ profile: row }, { status: 200 })
+  } catch (err) {
+    console.error('[api/profile] POST failed', err)
+    return Response.json(
+      { error: 'db_error', message: (err as Error).message },
+      { status: 500 }
+    )
+  }
+}
+
+export { profileBodySchema, bodyToInsert }

@@ -15,8 +15,13 @@ Read `PRODUCT.md` for users + voice + anti-references. Read `DESIGN.md` for toke
 - **Ingestion failover (3-tier)**: For any URL, try in order:
   1. Direct fetch with browser UA + `cheerio` (works for Craigslist HTML, Reddit JSON, Listings Project, simple sites).
   2. Browserless.io headless Chrome (failover for sites that block direct fetch but don't have an Apify actor) — `BROWSERLESS_TOKEN` optional.
-  3. Apify actor — primary path for Zillow / StreetEasy / Trulia / Apartments.com (use community actors). `APIFY_TOKEN` already in `~/.confido.env`.
+  3. Apify actor — primary path for Zillow / StreetEasy / Trulia / Apartments.com (use community actors). `APIFY_TOKEN` is the user's personal token, set in `.env.local`.
   Each tier is gated on its env var; missing token = skip that tier with a logged warning.
+
+## Secrets boundary (hard rule)
+
+- This is a **personal project**. Do **not** read, source, or reference `~/.confido.env`, the user's Confido infrastructure, or any work credentials.
+- All secrets live in `homeSnatch/.env.local` (gitignored). If you need a new env var, add it to `.env.local.example` and stop — don't fish for it elsewhere.
 
 - **Aesthetic**: Bento grid, photo-led, asymmetric. Larger cells for higher-scored listings. Vibe chips inline. Score badge prominent. Freshness badge ("3h ago", "yesterday", "5d ago"). Source badge subtle.
 - **Agents**: `src/agents/extract.ts` (HTML/JSON → NewListing) and `src/agents/score.ts` (Listing + ProfileSet → Score). Pure functions; DB writes happen in their callers.

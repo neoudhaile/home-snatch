@@ -13,6 +13,8 @@
     "seed": "tsx scripts/seed.ts",
     "seed:vibes": "tsx scripts/seed-vibes.ts",
     "scrape": "tsx scripts/scrape.ts",
+    "dedupe": "tsx scripts/dedupe.ts",
+    "refresh": "tsx scripts/refresh.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
