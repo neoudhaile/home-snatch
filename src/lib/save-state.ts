@@ -9,36 +9,51 @@
  *
  * No `saved_at` writes go to the mock store from the API; those calls error
  * if the DB is unavailable, which is the right behavior for a real save.
+ *
+ * Profile set is dynamic: who counts as a "saver" comes from the JSON files
+ * under src/profiles/. The lib trusts its callers — the API routes validate
+ * incoming `saved_by` values against `isValidSaver()` before we land here.
  */
 
 import { eq, and, inArray, desc } from 'drizzle-orm'
 import { listings, scores, neighborhood_vibes, saved_listings } from '@/db/schema'
 import type { RankedListing } from '@/types'
 import { getRankedFeed, getListing } from '@/lib/feed-data'
+import { getKnownSavers } from '@/lib/profile-set'
 
-export type Saver = 'inaan' | 'mekonnen'
-export const SAVERS: Saver[] = ['inaan', 'mekonnen']
+/** A saver slug. Just a string — runtime validation lives in `isValidSaver`. */
+export type Saver = string
 
-export function isSaver(value: unknown): value is Saver {
-  return value === 'inaan' || value === 'mekonnen'
+/**
+ * Server-side: the list of known saver slugs, sourced from src/profiles/.
+ * Always returns a fresh read so adding a profile JSON doesn't require a
+ * server restart.
+ */
+export async function getSavers(): Promise<string[]> {
+  return getKnownSavers()
 }
 
 /**
  * Process-local mock store. Seeded with a handful of listing IDs so design-time
  * /saved and /compare have content. Never persisted across process restarts.
+ *
+ * The seed is keyed by the canonical pair of profiles (inaan + makonnen) just
+ * for design-time content. It still works fine when those slugs don't exist
+ * (the data simply doesn't surface), and works fine when other slugs exist
+ * (their lists are empty).
  */
 type MockEntry = { listing_id: string; saved_by: Saver; saved_at: Date }
 const mockSeed: MockEntry[] = [
   // Both saved (intersection: the headline of /saved)
   { listing_id: 'a1f0c000-0000-4000-8000-000000000001', saved_by: 'inaan', saved_at: new Date(Date.now() - 6 * 60 * 60 * 1000) },
-  { listing_id: 'a1f0c000-0000-4000-8000-000000000001', saved_by: 'mekonnen', saved_at: new Date(Date.now() - 5 * 60 * 60 * 1000) },
+  { listing_id: 'a1f0c000-0000-4000-8000-000000000001', saved_by: 'makonnen', saved_at: new Date(Date.now() - 5 * 60 * 60 * 1000) },
   { listing_id: 'a1f0c000-0000-4000-8000-000000000012', saved_by: 'inaan', saved_at: new Date(Date.now() - 30 * 60 * 1000) },
-  { listing_id: 'a1f0c000-0000-4000-8000-000000000012', saved_by: 'mekonnen', saved_at: new Date(Date.now() - 90 * 60 * 1000) },
-  // Inaan only
+  { listing_id: 'a1f0c000-0000-4000-8000-000000000012', saved_by: 'makonnen', saved_at: new Date(Date.now() - 90 * 60 * 1000) },
+  // First-saver-only seed
   { listing_id: 'a1f0c000-0000-4000-8000-000000000002', saved_by: 'inaan', saved_at: new Date(Date.now() - 2 * 60 * 60 * 1000) },
   { listing_id: 'a1f0c000-0000-4000-8000-000000000010', saved_by: 'inaan', saved_at: new Date(Date.now() - 22 * 60 * 60 * 1000) },
-  // Mekonnen only
-  { listing_id: 'a1f0c000-0000-4000-8000-000000000004', saved_by: 'mekonnen', saved_at: new Date(Date.now() - 4 * 60 * 60 * 1000) },
+  // Second-saver-only seed
+  { listing_id: 'a1f0c000-0000-4000-8000-000000000004', saved_by: 'makonnen', saved_at: new Date(Date.now() - 4 * 60 * 60 * 1000) },
 ]
 
 // Globally cached mock store across hot reloads in dev.
@@ -144,10 +159,13 @@ export async function getSavedFor(saver: Saver): Promise<RankedListing[]> {
 }
 
 /**
- * Listings BOTH savers have saved. Sorted by joint score DESC. This is the
- * decision-relevant headline of /saved.
+ * Listings ALL known savers have saved. Sorted by joint score DESC. This is
+ * the decision-relevant headline of /saved.
  */
 export async function getSavedIntersection(): Promise<RankedListing[]> {
+  const knownSavers = await getKnownSavers()
+  const knownSet = new Set(knownSavers)
+
   const sharedIds = await tryDb(
     async () => {
       const { getDb } = await import('@/lib/db')
@@ -157,25 +175,26 @@ export async function getSavedIntersection(): Promise<RankedListing[]> {
         .from(saved_listings)
       const bySaver = new Map<string, Set<Saver>>()
       for (const r of rows) {
-        if (!isSaver(r.saved_by)) continue
+        if (!knownSet.has(r.saved_by)) continue
         const set = bySaver.get(r.listing_id) ?? new Set<Saver>()
         set.add(r.saved_by)
         bySaver.set(r.listing_id, set)
       }
       return [...bySaver.entries()]
-        .filter(([, savers]) => savers.size === SAVERS.length)
+        .filter(([, savers]) => savers.size === knownSavers.length && knownSavers.length > 0)
         .map(([id]) => id)
     },
     () => {
       const store = getMockStore()
       const bySaver = new Map<string, Set<Saver>>()
       for (const e of store) {
+        if (!knownSet.has(e.saved_by)) continue
         const set = bySaver.get(e.listing_id) ?? new Set<Saver>()
         set.add(e.saved_by)
         bySaver.set(e.listing_id, set)
       }
       return [...bySaver.entries()]
-        .filter(([, savers]) => savers.size === SAVERS.length)
+        .filter(([, savers]) => savers.size === knownSavers.length && knownSavers.length > 0)
         .map(([id]) => id)
     },
   )
@@ -194,6 +213,8 @@ export async function getSaveStateForListings(
   const out: Record<string, Saver[]> = Object.fromEntries(ids.map((id) => [id, []]))
   if (ids.length === 0) return out
 
+  const knownSet = new Set(await getKnownSavers())
+
   await tryDb(
     async () => {
       const { getDb } = await import('@/lib/db')
@@ -203,7 +224,7 @@ export async function getSaveStateForListings(
         .from(saved_listings)
         .where(inArray(saved_listings.listing_id, ids))
       for (const r of rows) {
-        if (!isSaver(r.saved_by)) continue
+        if (!knownSet.has(r.saved_by)) continue
         if (!out[r.listing_id]) out[r.listing_id] = []
         out[r.listing_id].push(r.saved_by)
       }
@@ -211,6 +232,7 @@ export async function getSaveStateForListings(
     () => {
       const store = getMockStore()
       for (const e of store) {
+        if (!knownSet.has(e.saved_by)) continue
         if (!out[e.listing_id]) continue
         out[e.listing_id].push(e.saved_by)
       }
@@ -220,7 +242,7 @@ export async function getSaveStateForListings(
 }
 
 /**
- * Total count across both savers (for the header pill). Cheap.
+ * Total count across all savers (for the header pill). Cheap.
  */
 export async function getTotalSavedCount(): Promise<number> {
   return tryDb(
@@ -286,7 +308,8 @@ export async function getCommuteTargets(): Promise<CommuteTarget[]> {
     const { join } = await import('node:path')
     const dir = join(process.cwd(), 'src', 'profiles')
     const out: CommuteTarget[] = []
-    for (const saver of SAVERS) {
+    const savers = await getKnownSavers()
+    for (const saver of savers) {
       try {
         const raw = await readFile(join(dir, `${saver}.json`), 'utf8')
         const json = JSON.parse(raw) as { commute?: Array<{ to?: string }> }

@@ -24,10 +24,15 @@ import {
   unsaveListing,
   getSavedFor,
   getSavedIntersection,
-  isSaver,
   type Saver,
 } from '@/lib/save-state'
-import { loadProfilesFromJson, mergeProfileConstraints } from '@/lib/profile-set'
+import {
+  loadProfilesFromJson,
+  loadAllProfileFiles,
+  mergeProfileConstraints,
+  getKnownSavers,
+  joinProfileNames,
+} from '@/lib/profile-set'
 import type { RankedListing } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -64,7 +69,13 @@ const Body = z.object({
 
 /* ---------------------------- system prompt ----------------------------- */
 
-const SYSTEM_PROMPT = `You are the homeSnatch chat assistant for Inaan and Mekonnen, two roommates apartment-hunting in NYC. You have access to their joint profile and the live listings database.
+/**
+ * Cached portion of the system prompt. Stable across requests so the prompt
+ * cache hits. The dynamic "who is the buyer" header is built per-request and
+ * placed BEFORE this block in a separate (non-cached) text part — when the
+ * profile JSONs change, the cache misses; otherwise, it hits.
+ */
+const SYSTEM_PROMPT_CACHED = `You are the homeSnatch chat assistant for the buyer(s) listed above, apartment-hunting in NYC. You have access to their joint profile and the live listings database.
 
 Voice rules (NON-NEGOTIABLE):
 - NYC-direct. Numbers over adjectives.
@@ -78,138 +89,183 @@ Behavior:
 - When citing a listing, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities). Always include the listing ID at the end of the citation.
 - Be concise: 1-3 sentences per response unless explicitly asked for more.
 - When the user wants to save/unsave, just do it via the tool, don't ask permission.
-- When drafting outreach emails, keep them under 80 words. Always include: greeting, who's asking (Inaan + Mekonnen), why this listing in particular (cite a fact), suggested viewing windows, sign-off.
+- When drafting outreach emails, keep them under 80 words. Always include: greeting, who's asking (use the buyer names from the header above), why this listing in particular (cite a fact), suggested viewing windows, sign-off.
 - When the user is making a decision between listings, push toward the data: "Listing X has 0 HPD violations and is rent-stabilized; Listing Y has 4 violations. Which matters more to you?"`
+
+async function buildBuyerHeader(): Promise<string> {
+  const profiles = await loadAllProfileFiles()
+  if (profiles.length === 0) {
+    return 'Buyer(s): (no profiles configured in src/profiles/).'
+  }
+  const names = profiles.map((p) => p.name)
+  if (profiles.length === 1) {
+    return `Buyer: ${names[0]}, apartment-hunting in NYC.`
+  }
+  return `Buyers: ${joinProfileNames(names)}, ${profiles.length} roommates apartment-hunting together in NYC.`
+}
 
 /* ---------------------------- tool definitions -------------------------- */
 
-const TOOLS: Anthropic.Tool[] = [
-  {
-    name: 'list_listings',
-    description:
-      'Fetch ranked listings from the database. Use for any "show me", "find", "top N", "what is available" request. Returns structured listing summaries with score, price, beds, neighborhood, score headline, freshness.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        filters: {
-          type: 'object',
-          description: 'Optional filters. Omit any filter that the user did not specify.',
-          properties: {
-            max_price: { type: 'number', description: 'Max monthly rent in USD.' },
-            min_price: { type: 'number' },
-            min_beds: { type: 'number', description: '0 = studio, 1, 2, etc.' },
-            max_beds: { type: 'number' },
-            neighborhood: { type: 'string', description: 'Case-insensitive substring match.' },
-            borough: {
-              type: 'string',
-              enum: ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
+/**
+ * Build the tool schema list dynamically. The saver-slug enums are populated
+ * from the live src/profiles/ JSONs so the model knows which slugs are valid.
+ * We keep `who` typed as `string` (not a static enum) so adding a profile JSON
+ * is enough — no code change required — and validate the slug after the model
+ * picks one (`isValidSaver`).
+ */
+async function buildTools(): Promise<{
+  tools: Anthropic.Tool[]
+  saverSlugs: string[]
+  jointSummaryHint: string
+}> {
+  const saverSlugs = await getKnownSavers()
+  const slugList = saverSlugs.length > 0 ? saverSlugs.join(', ') : '(none configured)'
+  const slugListWithBoth = saverSlugs.length > 0 ? `${saverSlugs.join(', ')}, both` : 'both'
+
+  const profiles = await loadAllProfileFiles()
+  const jointSummaryHint =
+    profiles.length === 0
+      ? 'Return the merged joint profile. (No profiles configured.)'
+      : `Return the merged ${joinProfileNames(profiles.map((p) => p.name))} joint profile (budget, beds, must-haves, deal-breakers, preferred areas, vibes, commute targets). Use to ground recommendations.`
+
+  const tools: Anthropic.Tool[] = [
+    {
+      name: 'list_listings',
+      description:
+        'Fetch ranked listings from the database. Use for any "show me", "find", "top N", "what is available" request. Returns structured listing summaries with score, price, beds, neighborhood, score headline, freshness.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          filters: {
+            type: 'object',
+            description: 'Optional filters. Omit any filter that the user did not specify.',
+            properties: {
+              max_price: { type: 'number', description: 'Max monthly rent in USD.' },
+              min_price: { type: 'number' },
+              min_beds: { type: 'number', description: '0 = studio, 1, 2, etc.' },
+              max_beds: { type: 'number' },
+              neighborhood: { type: 'string', description: 'Case-insensitive substring match.' },
+              borough: {
+                type: 'string',
+                enum: ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
+              },
+              freshness_days: {
+                type: 'number',
+                enum: [1, 7, 14, 30],
+                description: 'How recent posted_at must be. Default 14.',
+              },
+              min_score: { type: 'number', description: 'Filter to listings scoring >= this.' },
+              pet_friendly: { type: 'boolean' },
+              rent_stabilized: { type: 'boolean' },
+              max_hpd_12mo: { type: 'number' },
             },
-            freshness_days: {
-              type: 'number',
-              enum: [1, 7, 14, 30],
-              description: 'How recent posted_at must be. Default 14.',
-            },
-            min_score: { type: 'number', description: 'Filter to listings scoring >= this.' },
-            pet_friendly: { type: 'boolean' },
-            rent_stabilized: { type: 'boolean' },
-            max_hpd_12mo: { type: 'number' },
+          },
+          sort: {
+            type: 'string',
+            enum: ['score', 'fresh', 'price-asc'],
+            description: 'Default "score".',
+          },
+          limit: { type: 'number', description: 'Max results (1-20). Default 10.' },
+        },
+      },
+    },
+    {
+      name: 'get_listing',
+      description:
+        'Fetch full detail for one listing. Use when the user asks for more about a specific listing.',
+      input_schema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'Listing UUID.' } },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'save_listing',
+      description: "Save a listing to a saver's list. Idempotent.",
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          who: {
+            type: 'string',
+            description: `Profile slug. Currently: ${slugList}.`,
           },
         },
-        sort: {
-          type: 'string',
-          enum: ['score', 'fresh', 'price-asc'],
-          description: 'Default "score".',
+        required: ['id', 'who'],
+      },
+    },
+    {
+      name: 'unsave_listing',
+      description: "Remove a listing from a saver's list. Idempotent.",
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          who: {
+            type: 'string',
+            description: `Profile slug. Currently: ${slugList}.`,
+          },
         },
-        limit: { type: 'number', description: 'Max results (1-20). Default 10.' },
+        required: ['id', 'who'],
       },
     },
-  },
-  {
-    name: 'get_listing',
-    description:
-      'Fetch full detail for one listing. Use when the user asks for more about a specific listing.',
-    input_schema: {
-      type: 'object',
-      properties: { id: { type: 'string', description: 'Listing UUID.' } },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'save_listing',
-    description: 'Save a listing to a saver\'s list. Idempotent.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        who: { type: 'string', enum: ['inaan', 'mekonnen'] },
-      },
-      required: ['id', 'who'],
-    },
-  },
-  {
-    name: 'unsave_listing',
-    description: 'Remove a listing from a saver\'s list. Idempotent.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        who: { type: 'string', enum: ['inaan', 'mekonnen'] },
-      },
-      required: ['id', 'who'],
-    },
-  },
-  {
-    name: 'get_saved',
-    description:
-      'Return saved listings. who="both" returns the intersection (apartments BOTH have saved, the decision-relevant set).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        who: { type: 'string', enum: ['inaan', 'mekonnen', 'both'] },
-      },
-      required: ['who'],
-    },
-  },
-  {
-    name: 'compare_listings',
-    description:
-      'Side-by-side compare of N listings. Returns a structured table the assistant can summarize: price, beds, neighborhood, score, headline, top concerns, HPD count, rent-stabilized.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        ids: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Listing UUIDs. 2-5 ids recommended.',
+    {
+      name: 'get_saved',
+      description:
+        'Return saved listings. who="both" returns the intersection (apartments ALL configured savers have saved — the decision-relevant set).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          who: {
+            type: 'string',
+            description: `Profile slug, or "both" for the intersection. Currently: ${slugListWithBoth}.`,
+          },
         },
+        required: ['who'],
       },
-      required: ['ids'],
     },
-  },
-  {
-    name: 'get_profile_summary',
-    description:
-      'Return the merged Inaan + Mekonnen joint profile (budget, beds, must-haves, deal-breakers, preferred areas, vibes, commute targets). Use to ground recommendations.',
-    input_schema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'draft_email',
-    description:
-      'Draft a short outreach email to the listing\'s contact. Returns subject + body. Keep under 80 words.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        listing_id: { type: 'string' },
-        tone: { type: 'string', enum: ['casual', 'formal', 'enthusiastic'] },
-        context: {
-          type: 'string',
-          description: 'Anything specific the user wants mentioned (move date, questions, etc).',
+    {
+      name: 'compare_listings',
+      description:
+        'Side-by-side compare of N listings. Returns a structured table the assistant can summarize: price, beds, neighborhood, score, headline, top concerns, HPD count, rent-stabilized.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Listing UUIDs. 2-5 ids recommended.',
+          },
         },
+        required: ['ids'],
       },
-      required: ['listing_id', 'tone'],
     },
-  },
-]
+    {
+      name: 'get_profile_summary',
+      description: jointSummaryHint,
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'draft_email',
+      description:
+        "Draft a short outreach email to the listing's contact. Returns subject + body. Keep under 80 words.",
+      input_schema: {
+        type: 'object',
+        properties: {
+          listing_id: { type: 'string' },
+          tone: { type: 'string', enum: ['casual', 'formal', 'enthusiastic'] },
+          context: {
+            type: 'string',
+            description: 'Anything specific the user wants mentioned (move date, questions, etc).',
+          },
+        },
+        required: ['listing_id', 'tone'],
+      },
+    },
+  ]
+
+  return { tools, saverSlugs, jointSummaryHint }
+}
 
 /* ---------------------------- tool runners ------------------------------ */
 
@@ -367,7 +423,7 @@ async function tool_unsave(input: { id: string; who: Saver }): Promise<{ ok: tru
 }
 
 async function tool_get_saved(input: {
-  who: 'inaan' | 'mekonnen' | 'both'
+  who: string
 }): Promise<{ count: number; listings: ListingSummary[] }> {
   let rows: RankedListing[]
   if (input.who === 'both') rows = await getSavedIntersection()
@@ -466,15 +522,25 @@ async function tool_draft_email(input: {
     enthusiastic: contact?.name ? `Hey ${contact.name}!` : 'Hi there!',
   }
   const ctx = input.context ? ` ${input.context}` : ''
+
+  // Pull the buyer names from the live profile JSONs so the email mentions
+  // whoever's actually using the app, not a hardcoded pair.
+  const profiles = await loadAllProfileFiles()
+  const names = profiles.map((p) => p.name)
+  const buyersJoined = names.length > 0 ? joinProfileNames(names) : 'we'
+  const introVerb = names.length === 1 ? 'I am' : 'We are'
+  const moveInClause = names.length <= 1 ? 'looking to move in NYC' : 'looking to move in together in NYC'
+  const signOffNames = names.length > 0 ? names.join(' + ') : 'homeSnatch'
+
   const body = [
     greetingMap[input.tone],
     '',
-    `We are Inaan and Mekonnen, looking to move in together in NYC. Your ${l.neighborhood ?? ''} listing caught our attention because: ${fact}.${ctx}`,
+    `${introVerb} ${buyersJoined}, ${moveInClause}. Your ${l.neighborhood ?? ''} listing caught our attention because: ${fact}.${ctx}`,
     '',
     `Could we set up a viewing this week? Evenings after 6pm or weekend mornings work best. Happy to share paystubs and references upfront.`,
     '',
     'Thanks,',
-    'Inaan + Mekonnen',
+    signOffNames,
   ].join('\n')
   return {
     ok: true,
@@ -485,7 +551,11 @@ async function tool_draft_email(input: {
   }
 }
 
-async function runTool(name: string, input: unknown): Promise<unknown> {
+async function runTool(name: string, input: unknown, knownSavers: string[]): Promise<unknown> {
+  const validSlug = (s: unknown): s is string =>
+    typeof s === 'string' && knownSavers.includes(s)
+  const slugList = knownSavers.join(', ') || '(none)'
+
   switch (name) {
     case 'list_listings':
       return tool_list_listings(input as Parameters<typeof tool_list_listings>[0])
@@ -493,16 +563,27 @@ async function runTool(name: string, input: unknown): Promise<unknown> {
       return tool_get_listing(input as { id: string })
     case 'save_listing': {
       const i = input as { id: string; who: string }
-      if (!isSaver(i.who)) throw new Error("who must be 'inaan' or 'mekonnen'")
+      if (!validSlug(i.who)) {
+        throw new Error(`who '${i.who}' is not a known saver slug (valid: ${slugList})`)
+      }
       return tool_save({ id: i.id, who: i.who })
     }
     case 'unsave_listing': {
       const i = input as { id: string; who: string }
-      if (!isSaver(i.who)) throw new Error("who must be 'inaan' or 'mekonnen'")
+      if (!validSlug(i.who)) {
+        throw new Error(`who '${i.who}' is not a known saver slug (valid: ${slugList})`)
+      }
       return tool_unsave({ id: i.id, who: i.who })
     }
-    case 'get_saved':
-      return tool_get_saved(input as { who: 'inaan' | 'mekonnen' | 'both' })
+    case 'get_saved': {
+      const i = input as { who: string }
+      if (i.who !== 'both' && !validSlug(i.who)) {
+        throw new Error(
+          `who '${i.who}' is not a known saver slug (valid: ${slugList}, both)`,
+        )
+      }
+      return tool_get_saved(i)
+    }
     case 'compare_listings':
       return tool_compare(input as { ids: string[] })
     case 'get_profile_summary':
@@ -556,6 +637,14 @@ export async function POST(req: Request) {
   const client = getAnthropic()
   const encoder = new TextEncoder()
 
+  // Resolve everything that depends on the live profile set BEFORE we start
+  // streaming, so the system prompt and tool schemas are stable for the whole
+  // turn-loop.
+  const [{ tools, saverSlugs }, buyerHeader] = await Promise.all([
+    buildTools(),
+    buildBuyerHeader(),
+  ])
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       function push(chunk: string) {
@@ -576,11 +665,15 @@ export async function POST(req: Request) {
             model: MODELS.reason,
             max_tokens: 1500,
             temperature: 0.4,
-            tools: TOOLS,
+            tools,
+            // Two-part system: dynamic buyer header (uncached, short) + the
+            // long, cache_control-marked stable prompt. The cache hits on the
+            // bulk of the prompt for as long as the profile set is unchanged.
             system: [
+              { type: 'text', text: buyerHeader },
               {
                 type: 'text',
-                text: SYSTEM_PROMPT,
+                text: SYSTEM_PROMPT_CACHED,
                 cache_control: { type: 'ephemeral' },
               },
             ] as Anthropic.TextBlockParam[],
@@ -624,7 +717,7 @@ export async function POST(req: Request) {
             let resultPayload: unknown
             let isError = false
             try {
-              resultPayload = await runTool(block.name, block.input)
+              resultPayload = await runTool(block.name, block.input, saverSlugs)
             } catch (err) {
               isError = true
               resultPayload = { error: err instanceof Error ? err.message : 'tool failed' }

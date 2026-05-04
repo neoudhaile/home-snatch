@@ -1,8 +1,10 @@
 # homeSnatch
 
-A personal NYC apartment-hunting tool for two roommates. Reads two profiles, ingests listings from Craigslist / Reddit / Listings Project (and pasted single URLs from Zillow / StreetEasy / Trulia), enriches with NYC Open Data (subway distance, HPD violations, rent stabilization, neighborhood vibe from 311 + Parks + liquor licenses), and ranks them with a 2-line LLM rationale grounded in the actual facts.
+A personal NYC apartment-hunting tool for any number of roommates. Reads the profile JSONs under `src/profiles/` (currently one for Inaan Damaraju and one for Ne'oud Makonnen Haile), ingests listings from Craigslist / Reddit / Listings Project (and pasted single URLs from Zillow / StreetEasy / Trulia), enriches with NYC Open Data (subway distance, HPD violations, rent stabilization, neighborhood vibe from 311 + Parks + liquor licenses), and ranks them with a 2-line LLM rationale grounded in the actual facts.
 
-Not a public product. No signup, no marketing surface, no pricing. Two people deploy it on a hard-to-guess Vercel subdomain and use it to make a real-life decision.
+Not a public product. No signup, no marketing surface, no pricing. The people in `src/profiles/` deploy it on a hard-to-guess Vercel subdomain and use it to make a real-life decision.
+
+**To add a new user:** drop a `<slug>.json` in `src/profiles/` matching the schema (see `inaan.json` / `makonnen.json`); nothing else needs to change. The new profile shows up in `/saved`, `/compare`, the chat tools, the score system prompt, and the setup wizard automatically.
 
 > Screenshots: TODO.
 
@@ -36,10 +38,10 @@ npm run db:push
 #    Takes ~5 minutes; hits 311, parks, licenses, Overpass.
 npm run seed
 
-# 8. Edit profiles
-#    src/profiles/inaan.json
-#    src/profiles/mekonnen.json
-#    Replace every "FILL_ME ..." string. Or visit /setup once running.
+# 8. Edit profile JSONs (currently `inaan.json`, `makonnen.json`) or use the
+#    /setup wizard. Drop additional `<slug>.json` files into src/profiles/ to
+#    add more people; the app picks them up automatically — no code change.
+#    Replace every "FILL_ME ..." string in each profile.
 
 # 9. Run
 npm run dev

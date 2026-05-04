@@ -8,9 +8,13 @@ import { cn } from '@/lib/utils'
 import { SavedSection } from './saved-section'
 
 type Props = {
+  /** Listings ALL configured savers have saved (the intersection / headline). */
   both: RankedListing[]
-  inaan: RankedListing[]
-  mekonnen: RankedListing[]
+  /**
+   * Per-saver saved lists. Keys are profile slugs from src/profiles/.
+   * Order is the order sections render.
+   */
+  bySaver: Array<{ slug: string; name: string; listings: RankedListing[] }>
 }
 
 /**
@@ -24,11 +28,11 @@ type Props = {
  *     came here to decide and they have overlap, that's what they should
  *     compare first. They can deselect.
  */
-export function SavedShell({ both, inaan, mekonnen }: Props) {
-  const totalSaved = both.length + inaan.length + mekonnen.length
+export function SavedShell({ both, bySaver }: Props) {
+  const totalSaved = both.length + bySaver.reduce((acc, s) => acc + s.listings.length, 0)
   const everySaved = useMemo(
-    () => [...both, ...inaan, ...mekonnen],
-    [both, inaan, mekonnen],
+    () => [...both, ...bySaver.flatMap((s) => s.listings)],
+    [both, bySaver],
   )
   const [selected, setSelected] = useState<Set<string>>(() => {
     const initial = new Set<string>()
@@ -52,7 +56,7 @@ export function SavedShell({ both, inaan, mekonnen }: Props) {
   const selectedCount = selected.size
   const canCompare = selectedCount >= 2
 
-  // Order the selection by saved order across the three groups so the
+  // Order the selection by saved order across the groups so the
   // ?ids= param matches the visual order on the page.
   const orderedSelected = useMemo(() => {
     const order = new Map<string, number>()
@@ -64,6 +68,13 @@ export function SavedShell({ both, inaan, mekonnen }: Props) {
     ? `/compare?ids=${orderedSelected.join(',')}`
     : '#'
 
+  const allSlugs = bySaver.map((s) => s.slug)
+
+  // "Both" only makes sense as a label when there are exactly 2 savers.
+  // For 1, the intersection is irrelevant (it's just that person's list).
+  // For 3+, "All" is the honest label.
+  const intersectionTitle = bySaver.length <= 1 ? 'All' : bySaver.length === 2 ? 'Both' : 'All'
+
   return (
     <div className="space-y-6">
       <SavedHeader
@@ -73,34 +84,34 @@ export function SavedShell({ both, inaan, mekonnen }: Props) {
         compareHref={compareHref}
       />
 
-      <SavedSection
-        title="Both"
-        hint="by joint score"
-        headline
-        listings={both}
-        savedBy="both"
-        emptyKind="both"
-        selected={selected}
-        onToggleSelect={toggleSelect}
-      />
-      <SavedSection
-        title="Inaan"
-        hint="most recent first"
-        listings={inaan}
-        savedBy="inaan"
-        emptyKind="inaan"
-        selected={selected}
-        onToggleSelect={toggleSelect}
-      />
-      <SavedSection
-        title="Mekonnen"
-        hint="most recent first"
-        listings={mekonnen}
-        savedBy="mekonnen"
-        emptyKind="mekonnen"
-        selected={selected}
-        onToggleSelect={toggleSelect}
-      />
+      {bySaver.length >= 2 ? (
+        <SavedSection
+          title={intersectionTitle}
+          hint="by joint score"
+          headline
+          listings={both}
+          savedBy="both"
+          allSavers={allSlugs}
+          emptyKind="both"
+          selected={selected}
+          onToggleSelect={toggleSelect}
+        />
+      ) : null}
+
+      {bySaver.map((s) => (
+        <SavedSection
+          key={s.slug}
+          title={s.name}
+          hint="most recent first"
+          listings={s.listings}
+          savedBy={s.slug}
+          allSavers={allSlugs}
+          emptyKind={s.slug}
+          emptyDisplayName={s.name}
+          selected={selected}
+          onToggleSelect={toggleSelect}
+        />
+      ))}
     </div>
   )
 }
@@ -123,7 +134,7 @@ function SavedHeader({
           saved.
         </h1>
         <p className="tabular mt-1 text-[12px] text-muted-foreground">
-          <span className="font-medium text-foreground">{totalSaved}</span> across both lists.
+          <span className="font-medium text-foreground">{totalSaved}</span> across all lists.
           {selectedCount > 0 ? (
             <>
               {' '}

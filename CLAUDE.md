@@ -2,7 +2,7 @@
 
 ## What this is
 
-NYC apartment-hunting tool for Inaan + Mekonnen. Reads two profiles in `src/profiles/`, ingests listings from open sources (Craigslist, Reddit, Listings Project) plus on-demand single-URL paste (Zillow / StreetEasy / Trulia / etc.), enriches with NYC Open Data, and ranks against the joint criteria with an LLM-written rationale per listing.
+NYC apartment-hunting tool for the people in `src/profiles/` — currently Inaan Damaraju and Ne'oud Makonnen Haile, but the codebase is N-profile: any `<slug>.json` dropped under `src/profiles/` shows up everywhere (saved, compare, chat tools, scoring prompt, setup wizard) without code changes. Reads those profiles, ingests listings from open sources (Craigslist, Reddit, Listings Project) plus on-demand single-URL paste (Zillow / StreetEasy / Trulia / etc.), enriches with NYC Open Data, and ranks against the joint criteria with an LLM-written rationale per listing.
 
 Read `PRODUCT.md` for users + voice + anti-references. Read `DESIGN.md` for tokens + components.
 

@@ -21,8 +21,11 @@ import { ListingsRail, type RailListing } from './listings-rail'
  * The full chat surface: conversation column on the left, listings rail on
  * the right. Owns SSE stream parsing for /api/chat. Persists conversation
  * across reload via localStorage.
+ *
+ * `defaultSaver` is the slug used when the heart on a rail card is tapped
+ * (passed in from the page-level Server Component, sourced from src/profiles/).
  */
-export function ChatShell() {
+export function ChatShell({ defaultSaver }: { defaultSaver?: string } = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [hydrated, setHydrated] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
@@ -330,7 +333,7 @@ export function ChatShell() {
         {/* ---------- listings rail ---------- */}
         <aside className="hidden min-h-0 lg:block">
           <div className="sticky top-0 h-full overflow-y-auto pb-2">
-            <ListingsRail items={rail} />
+            <ListingsRail items={rail} defaultSaver={defaultSaver} />
           </div>
         </aside>
       </div>
@@ -338,7 +341,7 @@ export function ChatShell() {
       {/* mobile rail — below conversation */}
       {rail.length > 0 ? (
         <div className="border-t border-border pb-4 pt-3 lg:hidden">
-          <ListingsRail items={rail} />
+          <ListingsRail items={rail} defaultSaver={defaultSaver} />
         </div>
       ) : null}
     </div>

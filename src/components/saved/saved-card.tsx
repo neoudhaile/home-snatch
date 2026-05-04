@@ -14,14 +14,16 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-type Saver = 'inaan' | 'mekonnen'
+type Saver = string
 type Variant = 'compact' | 'highlight'
 
 type Props = {
   listing: RankedListing
   /** Which saver owns this card row (used by the X to know what to delete).
-   *  For "Both" we fire two delete calls. */
+   *  For "Both" we fire one delete per known saver (passed via `allSavers`). */
   savedBy: Saver | 'both'
+  /** All known saver slugs — used when `savedBy === 'both'` to fan out deletes. */
+  allSavers: Saver[]
   /** Add/remove this listing from the compare selection. */
   selected: boolean
   onToggleSelect: (id: string, next: boolean) => void
@@ -33,7 +35,7 @@ type Props = {
  * the "Both" intersection group to make those listings visually distinct
  * without resorting to a side-stripe (banned).
  */
-export function SavedCard({ listing, savedBy, selected, onToggleSelect, variant = 'compact' }: Props) {
+export function SavedCard({ listing, savedBy, allSavers, selected, onToggleSelect, variant = 'compact' }: Props) {
   const [removing, startRemove] = useTransition()
   const [hidden, setHidden] = useState(false)
   const photo = listing.photos?.[0]
@@ -46,7 +48,7 @@ export function SavedCard({ listing, savedBy, selected, onToggleSelect, variant 
     if (removing) return
     setHidden(true)
     startRemove(async () => {
-      const targets: Saver[] = savedBy === 'both' ? ['inaan', 'mekonnen'] : [savedBy]
+      const targets: Saver[] = savedBy === 'both' ? allSavers : [savedBy]
       try {
         for (const s of targets) {
           const res = await fetch('/api/save', {

@@ -8,7 +8,7 @@ import { ScoreBadge } from '@/components/score/score-badge'
 import { formatBeds, formatPrice } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-type Saver = 'inaan' | 'mekonnen'
+type Saver = string
 
 export type RailListing = {
   id: string
@@ -25,8 +25,18 @@ export type RailListing = {
 /**
  * Right-rail of listings the bot has touched, deduped, ordered by first
  * mention. Items are pushed in by the chat shell from `tool_result` SSE events.
+ *
+ * `defaultSaver` is the slug used when the heart on a rail card is tapped.
+ * Passed in by the chat shell from the live profile set; if omitted, the
+ * heart is hidden (no sensible default).
  */
-export function ListingsRail({ items }: { items: RailListing[] }) {
+export function ListingsRail({
+  items,
+  defaultSaver,
+}: {
+  items: RailListing[]
+  defaultSaver?: Saver
+}) {
   if (items.length === 0) return <RailEmpty />
 
   return (
@@ -38,7 +48,7 @@ export function ListingsRail({ items }: { items: RailListing[] }) {
       </div>
       <div className="space-y-2">
         {items.map((l) => (
-          <RailCard key={l.id} listing={l} />
+          <RailCard key={l.id} listing={l} defaultSaver={defaultSaver} />
         ))}
       </div>
     </div>
@@ -55,15 +65,20 @@ function RailEmpty() {
   )
 }
 
-function RailCard({ listing }: { listing: RailListing }) {
+function RailCard({
+  listing,
+  defaultSaver,
+}: {
+  listing: RailListing
+  defaultSaver?: Saver
+}) {
   const [saved, setSaved] = useState(false)
   const [pending, start] = useTransition()
-  const saver: Saver = 'inaan'
 
   function toggleSave(e: React.MouseEvent) {
     e.preventDefault()
     e.stopPropagation()
-    if (pending) return
+    if (pending || !defaultSaver) return
     const next = !saved
     setSaved(next)
     start(async () => {
@@ -71,7 +86,7 @@ function RailCard({ listing }: { listing: RailListing }) {
         const r = await fetch('/api/save', {
           method: next ? 'POST' : 'DELETE',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ listing_id: listing.id, saved_by: saver }),
+          body: JSON.stringify({ listing_id: listing.id, saved_by: defaultSaver }),
         })
         if (!r.ok) throw new Error(`save ${r.status}`)
         toast.success(next ? 'Saved.' : 'Removed.')
@@ -131,7 +146,8 @@ function RailCard({ listing }: { listing: RailListing }) {
       </Link>
 
       <div className="flex shrink-0 flex-col items-stretch justify-between gap-1 p-1.5">
-        <button
+        {defaultSaver ? (
+          <button
           type="button"
           onClick={toggleSave}
           disabled={pending}
@@ -151,6 +167,7 @@ function RailCard({ listing }: { listing: RailListing }) {
             aria-hidden
           />
         </button>
+        ) : null}
         <Link
           href={`/listing/${listing.id}`}
           aria-label="View listing"

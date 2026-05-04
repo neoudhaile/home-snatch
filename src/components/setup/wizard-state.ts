@@ -1,6 +1,14 @@
 import type { Source } from '@/types'
 
-export type WizardWho = 'inaan' | 'mekonnen' | 'both'
+/**
+ * The wizard's "who is setting up" choice. Indexed against the profile list
+ * sourced from src/profiles/ on the Server Component side; `'all'` means "set
+ * up every profile in this session" (replaces the old hardcoded "both").
+ *
+ * Single-profile mode (one JSON in src/profiles/): the wizard skips the WhoStep
+ * entirely and just sets `who = 0`.
+ */
+export type WizardWho = number | 'all'
 
 export type CommuteEntry = {
   to: string
@@ -12,6 +20,8 @@ export type CommuteEntry = {
 
 export type WizardProfile = {
   name: string
+  /** Slug used to write into src/profiles/<slug>.json. */
+  slug: string
   budget_min: number
   budget_max: number
   beds: string[] // chip values: 'studio' | '1br' | '1.5br' | '2br' | '2.5br' | '3br+'
@@ -34,8 +44,8 @@ export type WizardProfile = {
 export type WizardState = {
   step: number
   who: WizardWho | null
-  /** Active profile being edited. For 'both', we sequence two profiles. */
-  activeIndex: 0 | 1
+  /** Active profile being edited. Index into `profiles`. */
+  activeIndex: number
   profiles: WizardProfile[]
 }
 
@@ -158,9 +168,10 @@ export const NEIGHBORHOODS_BY_BOROUGH: Record<string, string[]> = {
   'Staten Island': ['St. George'],
 }
 
-export function defaultProfile(name: string): WizardProfile {
+export function defaultProfile(name: string, slug: string): WizardProfile {
   return {
     name,
+    slug,
     budget_min: 1800,
     budget_max: 3500,
     beds: ['1br', '2br'],
@@ -181,12 +192,24 @@ export function defaultProfile(name: string): WizardProfile {
   }
 }
 
-export function initialWizardState(): WizardState {
+/**
+ * Build the initial wizard state from the live set of profiles. Each entry
+ * is `{ slug, name }` — Server Component reads these from src/profiles/ and
+ * passes them in. If the list is empty (no profiles yet), seeds a single
+ * blank profile with slug 'me' so the wizard is still usable.
+ */
+export function initialWizardState(
+  seed: Array<{ slug: string; name: string }> = [],
+): WizardState {
+  const profiles =
+    seed.length > 0
+      ? seed.map((p) => defaultProfile(p.name, p.slug))
+      : [defaultProfile('Me', 'me')]
   return {
     step: 0,
     who: null,
     activeIndex: 0,
-    profiles: [defaultProfile('Inaan'), defaultProfile('Mekonnen')],
+    profiles,
   }
 }
 
@@ -200,7 +223,7 @@ export type WizardAction =
   | { type: 'commute-add' }
   | { type: 'commute-remove'; index: number }
   | { type: 'commute-update'; index: number; patch: Partial<CommuteEntry> }
-  | { type: 'switch-active'; index: 0 | 1 }
+  | { type: 'switch-active'; index: number }
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {

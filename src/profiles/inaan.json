@@ -1,6 +1,7 @@
 {
   "slug": "inaan",
   "name": "Inaan Damaraju",
+  "_note": "This is the canonical full-name + slug for this profile. The slug is what code references; the name is what UIs render.",
   "budget_min": null,
   "budget_max": null,
   "beds_min": 1,

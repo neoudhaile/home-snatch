@@ -103,7 +103,26 @@ export function buildSystemPrompt(args: {
           .join('\n')
       : '    (no concrete commute targets)'
 
-  return `You are the scoring agent for homeSnatch, a personal NYC apartment-hunting tool used by two roommates: ${profiles.map((p) => p.name).join(' and ')}. You rank a single listing against their joint criteria and write a 1-line headline plus an optional 1-line concern.
+  // Build the buyer label dynamically from whatever profiles are present so
+  // adding/removing/renaming a profile JSON propagates without a code change.
+  const names = profiles.map((p) => p.name)
+  let buyerSentence: string
+  if (names.length === 0) {
+    buyerSentence = 'used to rank NYC apartments. (No profiles configured.)'
+  } else if (names.length === 1) {
+    buyerSentence = `a personal NYC apartment-hunting tool used by ${names[0]}`
+  } else if (names.length === 2) {
+    buyerSentence = `a personal NYC apartment-hunting tool used by two roommates: ${names[0]} and ${names[1]}`
+  } else {
+    const oxford = `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+    buyerSentence = `a personal NYC apartment-hunting tool used by ${names.length} roommates: ${oxford}`
+  }
+
+  // Pick a representative buyer name for an example concern line. Stays stable
+  // across runs since profiles arrive sorted in `loadProfilesFromJson`.
+  const exampleName = names[0] ?? 'the buyer'
+
+  return `You are the scoring agent for homeSnatch, ${buyerSentence}. You rank a single listing against their joint criteria and write a 1-line headline plus an optional 1-line concern.
 
 # Joint constraints
 budget_min=${joint.budget_min ?? 'unset'}, budget_max=${joint.budget_max ?? 'unset'}
@@ -155,7 +174,7 @@ BAD examples (these will be rejected):
 Optional. One line, ≤140 chars, only if there's a real concern grounded in a listing fact. Examples:
   "4 HPD violations in the last 12 months. Posted 11 days ago, may already be off-market."
   "No contact info and no photos. Source: Reddit, often gets pulled fast."
-  "$3,400 is over Inaan's stretch budget by $200."
+  "$3,400 is over ${exampleName}'s stretch budget by $200."
 If no concern, return null.
 
 # top_facts

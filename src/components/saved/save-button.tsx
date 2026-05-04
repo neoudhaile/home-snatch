@@ -5,11 +5,13 @@ import { Heart } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
-type Saver = 'inaan' | 'mekonnen'
+type Saver = string
 
 type Props = {
   listing_id: string
   saved_by: Saver
+  /** Display name for the saver (e.g. "Inaan Damaraju"). Falls back to the slug. */
+  saver_name?: string
   initial: boolean
   /** Visual variant for the button surface. */
   variant?: 'default' | 'onPhoto'
@@ -25,12 +27,14 @@ type Props = {
 export function SaveButton({
   listing_id,
   saved_by,
+  saver_name,
   initial,
   variant = 'default',
   compact = false,
 }: Props) {
   const [saved, setSaved] = useState(initial)
   const [isPending, startTransition] = useTransition()
+  const displayName = saver_name ?? saved_by
 
   function toggle(e: React.MouseEvent) {
     // Stop the parent <Link> from navigating when the heart sits inside a card.
@@ -51,7 +55,7 @@ export function SaveButton({
         if (!res.ok) {
           throw new Error(`save failed: ${res.status}`)
         }
-        toast.success(next ? `Saved for ${saver_label(saved_by)}.` : `Removed from ${saver_label(saved_by)}'s list.`)
+        toast.success(next ? `Saved for ${displayName}.` : `Removed from ${displayName}'s list.`)
       } catch (err) {
         setSaved(!next)
         toast.error(err instanceof Error ? err.message : 'Save failed.')
@@ -66,7 +70,7 @@ export function SaveButton({
       type="button"
       onClick={toggle}
       aria-pressed={saved}
-      aria-label={saved ? `Remove from ${saver_label(saved_by)}'s saved` : `Save for ${saver_label(saved_by)}`}
+      aria-label={saved ? `Remove from ${displayName}'s saved` : `Save for ${displayName}`}
       disabled={isPending}
       className={cn(
         'group/save inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full',
@@ -91,8 +95,4 @@ export function SaveButton({
       {!compact ? <span>{label}</span> : null}
     </button>
   )
-}
-
-function saver_label(s: Saver): string {
-  return s === 'inaan' ? 'Inaan' : 'Mekonnen'
 }

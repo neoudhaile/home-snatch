@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils'
 import { ComparisonRow } from './comparison-row'
 import { CompareHeader } from './header'
 
-type Saver = 'inaan' | 'mekonnen'
+type Saver = string
 
 type Props = {
   listings: RankedListing[]
@@ -29,6 +29,8 @@ type Props = {
   saversByListing: Record<string, Saver[]>
   /** Profiles' commute targets (used for the per-target rows). */
   commuteTargets: { saver: Saver; label: string }[]
+  /** slug -> display name, sourced from src/profiles/ in the Server Component. */
+  profileNames: Record<string, string>
 }
 
 /**
@@ -52,7 +54,7 @@ const VIBE_EPS = 0.05
  *   - text rows compare normalized lowercase strings.
  *   - missing-vs-present is treated as a difference.
  */
-export function CompareTable({ listings, saversByListing, commuteTargets }: Props) {
+export function CompareTable({ listings, saversByListing, commuteTargets, profileNames }: Props) {
   const [highlight, setHighlight] = useState(true)
 
   const columns = listings.length
@@ -64,7 +66,10 @@ export function CompareTable({ listings, saversByListing, commuteTargets }: Prop
     return `minmax(140px, 200px) repeat(${columns}, minmax(220px, 1fr))`
   }, [columns])
 
-  const rows = useMemo(() => buildRows(listings, saversByListing, commuteTargets), [listings, saversByListing, commuteTargets])
+  const rows = useMemo(
+    () => buildRows(listings, saversByListing, commuteTargets, profileNames),
+    [listings, saversByListing, commuteTargets, profileNames],
+  )
 
   return (
     <TooltipProvider>
@@ -81,6 +86,7 @@ export function CompareTable({ listings, saversByListing, commuteTargets }: Prop
           rows={rows}
           highlight={highlight}
           saversByListing={saversByListing}
+          profileNames={profileNames}
         />
 
         {/* Desktop: grid table. */}
@@ -183,11 +189,13 @@ function MobileColumns({
   rows,
   highlight,
   saversByListing,
+  profileNames,
 }: {
   listings: RankedListing[]
   rows: BuiltRow[]
   highlight: boolean
   saversByListing: Record<string, Saver[]>
+  profileNames: Record<string, string>
 }) {
   return (
     <div className="md:hidden">
@@ -246,7 +254,7 @@ function MobileColumns({
               })}
             </div>
             <div className="px-4 pb-4 pt-2">
-              <SaversChips savers={saversByListing[l.id] ?? []} />
+              <SaversChips savers={saversByListing[l.id] ?? []} profileNames={profileNames} />
             </div>
           </article>
         ))}
@@ -257,7 +265,13 @@ function MobileColumns({
 
 /* -------------------- saver chips -------------------- */
 
-function SaversChips({ savers }: { savers: Saver[] }) {
+function SaversChips({
+  savers,
+  profileNames,
+}: {
+  savers: Saver[]
+  profileNames: Record<string, string>
+}) {
   if (savers.length === 0) {
     return <span className="text-[12px] text-muted-foreground">Not saved.</span>
   }
@@ -268,7 +282,7 @@ function SaversChips({ savers }: { savers: Saver[] }) {
           key={s}
           className="tabular inline-flex items-center rounded-full bg-warm px-2 py-[3px] text-[11px] font-medium text-warm-fg"
         >
-          {s === 'inaan' ? 'Inaan' : 'Mekonnen'}
+          {profileNames[s] ?? s}
         </span>
       ))}
     </div>
@@ -320,6 +334,7 @@ function buildRows(
   listings: RankedListing[],
   saversByListing: Record<string, Saver[]>,
   commuteTargets: { saver: Saver; label: string }[],
+  profileNames: Record<string, string>,
 ): BuiltRow[] {
   const out: BuiltRow[] = []
 
@@ -504,7 +519,7 @@ function buildRows(
   for (const target of commuteTargets) {
     out.push({
       key: `commute-${target.saver}-${target.label}`,
-      label: `Commute · ${target.saver === 'inaan' ? 'Inaan' : 'Mekonnen'}`,
+      label: `Commute · ${profileNames[target.saver] ?? target.saver}`,
       hint: target.label,
       values: listings.map((l) => {
         // Heuristic minute estimate: subway distance + line proxy. We don't
@@ -634,7 +649,9 @@ function buildRows(
   out.push({
     key: 'savedBy',
     label: 'Saved by',
-    values: listings.map((l) => <SaversChips savers={saversByListing[l.id] ?? []} />),
+    values: listings.map((l) => (
+      <SaversChips savers={saversByListing[l.id] ?? []} profileNames={profileNames} />
+    )),
     equality: listings.map((l) => (saversByListing[l.id] ?? []).slice().sort().join('|')),
     differ: !rowsEqual(listings.map((l) => (saversByListing[l.id] ?? []).slice().sort().join('|'))),
     muted: true,
@@ -930,7 +947,8 @@ function applicationKey(l: RankedListing): string {
  * subway station, we return null. When we have the station, estimate as:
  *   walk-to-station (≈ distance/80m-per-min) + a fixed commute proxy by
  *   borough → Manhattan-FiDi anchor. This is enough to let the comparison
- *   surface "Inaan-friendly: 22 min" vs "Mekonnen-friendly: 47 min".
+ *   surface a per-saver minute estimate (e.g. "saver-A: 22 min" vs
+ *   "saver-B: 47 min").
  */
 function estimateCommuteMinutes(l: RankedListing, _target: { saver: Saver; label: string }): number | null {
   const subway = l.nearest_subway

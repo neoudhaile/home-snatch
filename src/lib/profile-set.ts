@@ -37,9 +37,9 @@ export type ProfileFile = z.infer<typeof profileFileSchema>
 
 /**
  * A merged constraint object we hand to pre-match + scoring. All fields are
- * derived from BOTH profiles. `vibes` only contains keys present in every
- * profile (so we don't pretend Inaan's "quiet=7" is a joint preference if
- * Mekonnen never weighed in).
+ * derived from every profile in the set. `vibes` only contains keys present
+ * in every profile (so we don't pretend one person's "quiet=7" is a joint
+ * preference if another person never weighed in).
  */
 export type JointConstraints = {
   budget_min: number | null
@@ -141,6 +141,89 @@ export async function loadProfilesFromJson(
     }
   }
   return out
+}
+
+/**
+ * Read every JSON file under src/profiles/, validate, and return the parsed
+ * profiles regardless of whether they're "ready" (FILL_ME tolerated). This is
+ * the canonical list of *known* profile slugs/names — the one referenced by
+ * the saver/UI surface so a half-filled profile still shows up as a saver.
+ *
+ * Server-side only; uses fs.
+ */
+export async function loadAllProfileFiles(
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<ProfileFile[]> {
+  let files: string[]
+  try {
+    files = await readdir(profilesDir)
+  } catch (err) {
+    console.warn(`[profile-set] could not read ${profilesDir}: ${(err as Error).message}`)
+    return []
+  }
+
+  const out: ProfileFile[] = []
+  for (const file of files.filter((f) => f.endsWith('.json'))) {
+    const path = join(profilesDir, file)
+    try {
+      const raw = await readFile(path, 'utf8')
+      const parsed = profileFileSchema.parse(JSON.parse(raw))
+      out.push(parsed)
+    } catch (err) {
+      console.warn(`[profile-set] failed to parse ${file}: ${(err as Error).message}`)
+    }
+  }
+  // Sort alphabetically by slug for deterministic ordering across the app.
+  out.sort((a, b) => a.slug.localeCompare(b.slug))
+  return out
+}
+
+/**
+ * Known saver slugs, derived from the JSON filenames in src/profiles/.
+ * Server-side only.
+ */
+export async function getKnownSavers(
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<string[]> {
+  const profiles = await loadAllProfileFiles(profilesDir)
+  return profiles.map((p) => p.slug)
+}
+
+/**
+ * Map of slug -> display name. Server-side only.
+ */
+export async function getProfileNames(
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<Record<string, string>> {
+  const profiles = await loadAllProfileFiles(profilesDir)
+  const out: Record<string, string> = {}
+  for (const p of profiles) out[p.slug] = p.name
+  return out
+}
+
+/**
+ * Runtime validation: is `slug` a known saver? Server-side only.
+ */
+export async function isValidSaver(
+  slug: string,
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<boolean> {
+  if (typeof slug !== 'string' || slug.length === 0) return false
+  const slugs = await getKnownSavers(profilesDir)
+  return slugs.includes(slug)
+}
+
+/**
+ * Render a list of names with English-style joining.
+ *   1 → "Alice"
+ *   2 → "Alice and Bob"
+ *   3+ → "Alice, Bob, and Carol"   (Oxford comma)
+ */
+export function joinProfileNames(names: string[]): string {
+  if (names.length === 0) return ''
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
 }
 
 function uniq(xs: string[]): string[] {

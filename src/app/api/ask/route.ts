@@ -14,6 +14,7 @@ import { z } from 'zod'
 import type Anthropic from '@anthropic-ai/sdk'
 import { getAnthropic, MODELS } from '@/lib/anthropic'
 import { getListingDetail } from '@/lib/listing-helpers'
+import { loadAllProfileFiles, joinProfileNames } from '@/lib/profile-set'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -23,13 +24,25 @@ const Body = z.object({
   question: z.string().min(1).max(2000),
 })
 
-const SYSTEM_PROMPT = `You are answering a follow-up question about a single NYC apartment listing for the buyer (Inaan + Mekonnen). You have the full listing facts plus the public-data enrichment. Answer in 1-3 sentences max, ground in facts you have, never invent. If the answer requires data not present, say so.
+/**
+ * The cached portion of the system prompt. Stays identical across requests so
+ * the prompt cache hits. The dynamic name section is appended *before* this
+ * block in a separate, non-cached text part.
+ */
+const SYSTEM_PROMPT_CACHED = `You are answering a follow-up question about a single NYC apartment listing for the buyer(s). You have the full listing facts plus the public-data enrichment. Answer in 1-3 sentences max, ground in facts you have, never invent. If the answer requires data not present, say so.
 
 Voice rules:
 - NYC-direct. Prefer numbers over adjectives.
 - No real-estate prose ("luxury", "modern", "stunning", "must-see", "charming", "cozy").
 - No em dashes. Use periods, commas, parentheses.
 - Do not invent commute times, addresses, or amenities. If the listing block doesn't mention something, say "not in the listing".`
+
+async function buildBuyerHeader(): Promise<string> {
+  const profiles = await loadAllProfileFiles()
+  if (profiles.length === 0) return 'Buyer: (no profiles configured).'
+  const names = profiles.map((p) => p.name)
+  return `Buyer: ${joinProfileNames(names)}.`
+}
 
 function buildListingBlock(args: {
   listing: Awaited<ReturnType<typeof getListingDetail>>
@@ -132,6 +145,7 @@ export async function POST(req: Request) {
 
   // 3. build the streamed response
   const userPrompt = buildListingBlock({ listing, question: body.question })
+  const buyerHeader = await buildBuyerHeader()
   const client = getAnthropic()
 
   const encoder = new TextEncoder()
@@ -142,10 +156,15 @@ export async function POST(req: Request) {
         model: MODELS.reason,
         max_tokens: 600,
         temperature: 0.3,
+        // Two-part system: a short, dynamic buyer header (NOT cached, so changes
+        // when profiles change) + the cached bulk of the prompt. Anthropic's
+        // prompt cache keys on prefix-equality, so we put the dynamic part first
+        // and the cache_control marker on the long, stable part.
         system: [
+          { type: 'text', text: buyerHeader },
           {
             type: 'text',
-            text: SYSTEM_PROMPT,
+            text: SYSTEM_PROMPT_CACHED,
             cache_control: { type: 'ephemeral' },
           },
         ] as Anthropic.TextBlockParam[],

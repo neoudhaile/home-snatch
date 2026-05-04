@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { ChatShell } from '@/components/chat/chat-shell'
+import { getKnownSavers } from '@/lib/profile-set'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +15,12 @@ export const metadata: Metadata = {
  * conversation surface itself. The header here mirrors the /saved minimal bar
  * so we keep the visual identity without duplicating filter chrome.
  */
-export default function ChatPage() {
+export default async function ChatPage() {
+  // The first known saver is the default account for "save from rail" actions.
+  // Generalized: comes from src/profiles/, no hardcoded slug.
+  const savers = await getKnownSavers()
+  const defaultSaver = savers[0]
+
   return (
     <>
       <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -46,7 +52,7 @@ export default function ChatPage() {
         </div>
       </header>
       <main className="flex-1">
-        <ChatShell />
+        <ChatShell defaultSaver={defaultSaver} />
       </main>
     </>
   )

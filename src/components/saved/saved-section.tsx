@@ -5,7 +5,7 @@ import { SavedCard } from './saved-card'
 import { SavedEmpty } from './empty-state'
 import { cn } from '@/lib/utils'
 
-type Saver = 'inaan' | 'mekonnen'
+type Saver = string
 
 type Props = {
   title: string
@@ -14,8 +14,12 @@ type Props = {
   listings: RankedListing[]
   /** Saved-by tag passed to each card (drives the X behavior). */
   savedBy: Saver | 'both'
+  /** All known saver slugs — used by cards when removing a "both"-saved row. */
+  allSavers: Saver[]
+  /** Display name for the empty-state copy when `emptyKind` is a slug. */
+  emptyDisplayName?: string
   /** Empty-state copy variant. */
-  emptyKind?: Saver | 'both'
+  emptyKind?: Saver | 'both' | 'self'
   /** Whether this section is the headline / intersection. Visually elevates. */
   headline?: boolean
   /** Compare-selection state, owned by the parent shell. */
@@ -28,6 +32,8 @@ export function SavedSection({
   hint,
   listings,
   savedBy,
+  allSavers,
+  emptyDisplayName,
   emptyKind,
   headline = false,
   selected,
@@ -67,7 +73,7 @@ export function SavedSection({
       </div>
 
       {listings.length === 0 ? (
-        emptyKind ? <SavedEmpty kind={emptyKind} /> : null
+        emptyKind ? <SavedEmpty kind={emptyKind} displayName={emptyDisplayName} /> : null
       ) : (
         <div
           className={cn(
@@ -80,6 +86,7 @@ export function SavedSection({
               key={l.id}
               listing={l}
               savedBy={savedBy}
+              allSavers={allSavers}
               selected={selected.has(l.id)}
               onToggleSelect={onToggleSelect}
               variant={headline ? 'highlight' : 'compact'}

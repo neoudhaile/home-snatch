@@ -8,15 +8,15 @@ product
 
 ## Users
 
-Two roommates apartment-hunting in NYC together — primarily Inaan (the maintainer) and Mekonnen (his friend / future co-tenant). They are both technical, both impatient, and have used Zillow / StreetEasy / Trulia enough times to know that none of them rank well for *their* actual criteria. They want a tool that:
+The people apartment-hunting in NYC together, defined by the JSON files in `src/profiles/`. Currently that's two roommates — Inaan Damaraju (the maintainer) and Ne'oud Makonnen Haile (his friend / future co-tenant) — but the architecture is N-profile from the ground up: dropping a new `<slug>.json` into `src/profiles/` adds them everywhere (saved, compare, chat tools, scoring prompt, setup wizard) without any code change. They are technical, impatient, and have used Zillow / StreetEasy / Trulia enough times to know that none of them rank well for *their* actual criteria. They want a tool that:
 
-- Reads two profiles (their must-haves, deal-breakers, vibe preferences, budget, commute targets) and *reconciles* them.
+- Reads any number of profiles (their must-haves, deal-breakers, vibe preferences, budget, commute targets) and *reconciles* them.
 - Pulls listings from open sources continuously (Craigslist, Reddit r/NYCapartments, Listings Project) plus on-demand single-URL ingest of any link they paste (Zillow / StreetEasy / Trulia / etc.).
 - Enriches every listing with NYC Open Data: subway distance, HPD violations, rent stabilization status, neighborhood noise/walkability/greenness signal computed from 311 and Parks data.
 - Returns a ranked feed with a 2-line LLM rationale per listing — one thing the agent likes about it for *them*, one concern.
-- Lets either of them paste a link and get a score in <10s.
+- Lets anyone in the profile set paste a link and get a score in <10s.
 
-It is **not** a public product. There is no marketing surface, no signup, no pricing page. It is a tool the two of them deploy on Vercel under a hard-to-guess subdomain and use to make a real-life decision over the next 6–10 weeks.
+It is **not** a public product. There is no marketing surface, no signup, no pricing page. It is a tool the people in `src/profiles/` deploy on Vercel under a hard-to-guess subdomain and use to make a real-life decision over the next 6–10 weeks.
 
 ## Voice
 
@@ -42,7 +42,7 @@ Hard nos for the visual + interaction language. The product should feel like the
 
 2. **Show your work.** Every score has a rationale that names a specific thing — "4 stops to FiDi, dishwasher, in your stretch budget" — never "high match." Every neighborhood vibe is computed from a named NYC Open Data source, not vibes-coded by the model.
 
-3. **Profiles are the unit of personalization, not user accounts.** Two JSON files in `src/profiles/` (one per person), edited as code. No setup wizard in v0. The friction of editing JSON is the feature — it forces clarity.
+3. **Profiles are the unit of personalization, not user accounts.** Any number of JSON files in `src/profiles/` (one per person), edited as code. The setup wizard is a thin convenience over the same schema. The friction of editing JSON is the feature — it forces clarity.
 
 4. **Real numbers, no fake precision.** Commute time = subway-station distance + average headway + transfer count. Don't pretend to door-to-door minute-accuracy when we don't have either address.
 

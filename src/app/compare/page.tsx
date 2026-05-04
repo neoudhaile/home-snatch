@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { getListing } from '@/lib/feed-data'
 import { getCommuteTargets, getSaversByListing } from '@/lib/save-state'
+import { getProfileNames } from '@/lib/profile-set'
 import { CompareTable } from '@/components/compare/compare-table'
 import { SavedHeaderBar } from '@/components/saved/page-header'
 import type { RankedListing } from '@/types'
@@ -26,9 +27,10 @@ export default async function ComparePage({ searchParams }: { searchParams: Sear
     if (found) listings.push(found)
   }
 
-  const [saversByListing, commuteTargets] = await Promise.all([
+  const [saversByListing, commuteTargets, profileNames] = await Promise.all([
     getSaversByListing(listings.map((l) => l.id)),
     getCommuteTargets(),
+    getProfileNames(),
   ])
 
   return (
@@ -44,6 +46,7 @@ export default async function ComparePage({ searchParams }: { searchParams: Sear
             listings={listings}
             saversByListing={saversByListing}
             commuteTargets={commuteTargets}
+            profileNames={profileNames}
           />
         )}
       </main>
