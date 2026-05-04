@@ -12,6 +12,13 @@ Read `PRODUCT.md` for users + voice + anti-references. Read `DESIGN.md` for toke
 - **DB**: Supabase Postgres via Drizzle ORM (`src/db/schema.ts` is the canonical schema; never freelance schema changes).
 - **LLM**: Anthropic SDK (`src/lib/anthropic.ts`). Use Haiku 4.5 for cheap extraction, Sonnet 4.6 for scoring + reasoning. Always prompt-cache the system message and the neighborhood-vibe context.
 - **Scrapers**: `src/scrapers/<source>.ts` — each exports `async function fetch(): Promise<NewListing[]>`. Browser User-Agent header always.
+- **Ingestion failover (3-tier)**: For any URL, try in order:
+  1. Direct fetch with browser UA + `cheerio` (works for Craigslist HTML, Reddit JSON, Listings Project, simple sites).
+  2. Browserless.io headless Chrome (failover for sites that block direct fetch but don't have an Apify actor) — `BROWSERLESS_TOKEN` optional.
+  3. Apify actor — primary path for Zillow / StreetEasy / Trulia / Apartments.com (use community actors). `APIFY_TOKEN` already in `~/.confido.env`.
+  Each tier is gated on its env var; missing token = skip that tier with a logged warning.
+
+- **Aesthetic**: Bento grid, photo-led, asymmetric. Larger cells for higher-scored listings. Vibe chips inline. Score badge prominent. Freshness badge ("3h ago", "yesterday", "5d ago"). Source badge subtle.
 - **Agents**: `src/agents/extract.ts` (HTML/JSON → NewListing) and `src/agents/score.ts` (Listing + ProfileSet → Score). Pure functions; DB writes happen in their callers.
 
 ## Quality bar — non-negotiable
