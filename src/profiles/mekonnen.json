@@ -1,0 +1,31 @@
+{
+  "slug": "mekonnen",
+  "name": "Mekonnen",
+  "budget_min": null,
+  "budget_max": null,
+  "beds_min": 1,
+  "beds_max": 2,
+  "must_have": ["FILL_ME"],
+  "nice_to_have": ["FILL_ME"],
+  "deal_breakers": ["FILL_ME"],
+  "vibes": {
+    "quiet": null,
+    "walkable": null,
+    "trendy": null,
+    "cafes": null,
+    "nightlife": null,
+    "greenness": null,
+    "family_friendly": null
+  },
+  "commute": [
+    {
+      "to": "FILL_ME",
+      "lat": null,
+      "lng": null,
+      "max_minutes": null,
+      "modes": ["subway", "walk"]
+    }
+  ],
+  "preferred_areas": ["FILL_ME"],
+  "notes": "FILL_ME"
+}

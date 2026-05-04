@@ -1,0 +1,39 @@
+{
+  "slug": "inaan",
+  "name": "Inaan Damaraju",
+  "budget_min": null,
+  "budget_max": null,
+  "beds_min": 1,
+  "beds_max": 2,
+  "must_have": [
+    "FILL_ME — list non-negotiables, e.g. 'in-unit laundry', 'dishwasher', 'natural light', 'separate bedroom (no studio)'"
+  ],
+  "nice_to_have": [
+    "FILL_ME — list things that boost score but aren't dealbreakers, e.g. 'roof access', 'gym in building', 'no broker fee', 'rent-stabilized'"
+  ],
+  "deal_breakers": [
+    "FILL_ME — e.g. 'ground floor', 'shared bathroom', 'walk-up >4 flights', 'no windows in bedroom'"
+  ],
+  "vibes": {
+    "quiet": 7,
+    "walkable": 8,
+    "trendy": 5,
+    "cafes": 8,
+    "nightlife": 4,
+    "greenness": 6,
+    "family_friendly": 3
+  },
+  "commute": [
+    {
+      "to": "FILL_ME — e.g. 'Lindy HQ — 1 World Trade Center'",
+      "lat": null,
+      "lng": null,
+      "max_minutes": 35,
+      "modes": ["subway", "walk"]
+    }
+  ],
+  "preferred_areas": [
+    "FILL_ME — e.g. 'West Village', 'Bed-Stuy', 'Williamsburg', 'Lower East Side', 'Crown Heights'"
+  ],
+  "notes": "FILL_ME — anything else that doesn't fit elsewhere. Mood, lifestyle, story."
+}
