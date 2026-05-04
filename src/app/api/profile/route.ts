@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { sql } from 'drizzle-orm'
 import { profiles } from '@/db/schema'
 import { getDb } from '@/lib/db'
+import { loadAllProfileFiles } from '@/lib/profile-set'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -82,17 +83,27 @@ function bodyToInsert(body: ProfileBody) {
 }
 
 export async function GET() {
+  // JSON files in src/profiles/ are the source of truth. DB rows override on
+  // slug clash (so the wizard's saves take precedence over the on-disk seed).
+  const fileProfiles = await loadAllProfileFiles().catch((err) => {
+    console.warn('[api/profile] file load failed', err)
+    return [] as Array<{ slug: string; [k: string]: unknown }>
+  })
+
+  let dbRows: Array<{ slug: string; [k: string]: unknown }> = []
   try {
     const db = getDb()
-    const rows = await db.select().from(profiles).orderBy(profiles.slug)
-    return Response.json({ profiles: rows }, { status: 200 })
+    dbRows = (await db.select().from(profiles).orderBy(profiles.slug)) as typeof dbRows
   } catch (err) {
-    console.error('[api/profile] GET failed', err)
-    return Response.json(
-      { error: 'db_error', message: (err as Error).message },
-      { status: 500 }
-    )
+    console.warn('[api/profile] DB read failed, returning files only', err)
   }
+
+  const merged = new Map<string, { slug: string; [k: string]: unknown }>()
+  for (const p of fileProfiles) merged.set(p.slug, p)
+  for (const p of dbRows) merged.set(p.slug, p)
+  const out = Array.from(merged.values()).sort((a, b) => a.slug.localeCompare(b.slug))
+
+  return Response.json({ profiles: out }, { status: 200 })
 }
 
 export async function POST(req: Request) {

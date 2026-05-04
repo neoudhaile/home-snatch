@@ -309,7 +309,9 @@ export async function generateMarketSummary(): Promise<MarketSummary> {
   const computed_at = new Date()
 
   // No key → deterministic fallback. UI still gets a usable summary.
-  if (!process.env.ANTHROPIC_API_KEY) {
+  // Empty listings → also skip the LLM call. Sonnet has nothing to summarize
+  // and stalls trying. Same fallback works.
+  if (!process.env.ANTHROPIC_API_KEY || listings.length === 0) {
     const fb = fallbackSummary(stats)
     return {
       headline: lintVoice(fb.headline),
