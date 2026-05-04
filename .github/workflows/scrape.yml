@@ -1,0 +1,77 @@
+name: scrape
+
+# Scheduled scrape of NYC apartment listings (Craigslist + Reddit + Listings
+# Project + Apify actors for the bot-protected sites). Runs from GitHub Actions
+# instead of Vercel Cron because:
+#   1. Vercel Hobby caps function duration at 60s (extendable to 5min on Pro).
+#      A full scrape can take 5-10min — Apify actor runs alone are 1-3min each.
+#   2. GH Actions has no per-job time limit (jobs cap at 6h, fine).
+#   3. Different runner IPs per run → less consistent footprint, better for
+#      Craigslist's per-IP throttling.
+#
+# Vercel Cron still runs the lighter `/api/cron/scrape` every 2h as a fallback;
+# this workflow runs every 2h offset by 30min so they don't collide.
+
+on:
+  schedule:
+    # every 2h at :30 — offset from the Vercel cron at :00
+    - cron: '30 */2 * * *'
+  workflow_dispatch: # allow manual run from the Actions tab
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false # let the previous run finish; don't double-write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run scrape
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
+        run: npx tsx scripts/scrape.ts
+
+      - name: Rescore newly-ingested listings
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Hits the same /api/admin/dq?action=rescore logic via a small
+        # tsx invocation. We do this inline so a scrape failure doesn't
+        # leave new listings without scores.
+        run: |
+          npx tsx -e '
+            import("./src/agents/score.ts").then(async ({ scoreListings }) => {
+              const { getDb } = await import("./src/lib/db.ts");
+              const { listings, scores } = await import("./src/db/schema.ts");
+              const { loadAllProfileFiles } = await import("./src/lib/profile-set.ts");
+              const profiles = await loadAllProfileFiles();
+              if (profiles.length === 0) { console.log("[rescore] no profiles configured, skipping"); process.exit(0); }
+              const db = getDb();
+              const rows = await db.select().from(listings);
+              const scoreRows = await db.select().from(scores);
+              const scored = new Set(scoreRows.map(s => s.listing_id));
+              const unscored = rows.filter(r => !scored.has(r.id));
+              console.log(`[rescore] scoring ${unscored.length} new listings against ${profiles.length} profiles`);
+              if (unscored.length === 0) process.exit(0);
+              const out = await scoreListings(unscored, profiles);
+              for (const s of out) {
+                await db.insert(scores).values(s).onConflictDoUpdate({ target: [scores.listing_id, scores.profile_set_hash], set: s });
+              }
+              console.log(`[rescore] done, wrote ${out.length} scores`);
+              process.exit(0);
+            }).catch(e => { console.error(e); process.exit(1); });
+          '

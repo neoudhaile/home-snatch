@@ -309,3 +309,47 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- chat markdown surface ---------- */
+
+/* Custom marker for unordered list items: small dot using foreground/40. */
+.chat-md ul > li.chat-md-li::before {
+  content: "";
+  position: absolute;
+  left: 0.4rem;
+  top: 0.65rem;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: oklch(from var(--foreground) l c h / 0.45);
+}
+
+/* Numbered lists use a serif italic numeral counter. Matches the app wordmark. */
+.chat-md ol.chat-md-ol {
+  list-style: none;
+}
+.chat-md ol.chat-md-ol > li.chat-md-li {
+  counter-increment: chatlist;
+}
+.chat-md ol.chat-md-ol > li.chat-md-li::before {
+  content: counter(chatlist) ".";
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--font-instrument-serif), ui-serif, Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: oklch(from var(--foreground) l c h / 0.55);
+  background: transparent;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+}
+
+/* Table cells should keep prose-grade readability without inheriting `whitespace-pre-wrap`. */
+.chat-md-table th,
+.chat-md-table td {
+  white-space: normal;
+}

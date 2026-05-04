@@ -1,0 +1,31 @@
+name: dedupe
+
+# Cross-source duplicate marking — runs nightly. Finds the same physical
+# apartment listed on multiple sources (Zillow + StreetEasy + Craigslist) and
+# collapses to a canonical with the rich-data source preferred. Pure SQL +
+# in-memory work; no external API calls.
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # 05:00 UTC = 01:00 NYC
+  workflow_dispatch:
+
+concurrency:
+  group: dedupe
+  cancel-in-progress: true
+
+jobs:
+  dedupe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run dedupe
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx tsx scripts/dedupe.ts

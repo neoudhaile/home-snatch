@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, Send, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Textarea } from '@/components/ui/textarea'
@@ -16,6 +16,7 @@ import { MessageBubble, type ToolEvent } from './message'
 import { SuggestedPrompts } from './suggested-prompts'
 import { TypingIndicator } from './typing-indicator'
 import { ListingsRail, type RailListing } from './listings-rail'
+import { RailMapContext } from './rail-context'
 
 /**
  * The full chat surface: conversation column on the left, listings rail on
@@ -194,19 +195,34 @@ export function ChatShell({ defaultSaver }: { defaultSaver?: string } = {}) {
 
         // On stream close, persist the assistant turn. Build a structured
         // content array so re-serialisation across reloads still surfaces
-        // the tool-call chips.
+        // the tool-call chips with their resolved counts.
         const finalContent: ContentBlock[] = []
         const seenToolIds = new Set<string>()
-        // Interleave tool_use/result chips between text segments. We don't
-        // know exact ordering between text deltas and tool events, but the
-        // user-facing render is fine with chips floating below the prose.
         if (accText.trim().length > 0) {
           finalContent.push({ type: 'text', text: accText })
         }
         for (const t of collectedTools) {
           if (t.kind === 'use' && !seenToolIds.has(t.id)) {
-            finalContent.push({ type: 'tool_use', id: t.id, name: t.name, input: t.input })
+            finalContent.push({
+              type: 'tool_use',
+              id: t.id,
+              name: t.name,
+              input: t.input,
+            })
             seenToolIds.add(t.id)
+          }
+        }
+        // Bake the tool-result summaries into the saved content so reloaded
+        // chips still show "Searched listings · 12 found" rather than a
+        // perma-spinning "Searching listings".
+        for (const t of collectedTools) {
+          if (t.kind === 'result') {
+            finalContent.push({
+              type: 'tool_result',
+              tool_use_id: t.id,
+              content: JSON.stringify({ ok: t.ok, ids: t.ids, name: t.name }),
+              is_error: !t.ok,
+            })
           }
         }
 
@@ -244,7 +260,17 @@ export function ChatShell({ defaultSaver }: { defaultSaver?: string } = {}) {
   const showEmpty = hydrated && messages.length === 0 && !isStreaming
   const showTyping = isStreaming && liveText.length === 0 && liveTools.length === 0
 
+  // The rail map keyed by listing id, shared with every message so inline
+  // pills can pick up real titles + scores from tool results without an
+  // extra network round-trip.
+  const railMap = useMemo(() => {
+    const m = new Map<string, RailListing>()
+    for (const r of rail) m.set(r.id, r)
+    return m
+  }, [rail])
+
   return (
+    <RailMapContext.Provider value={railMap}>
     <div className="mx-auto flex h-[calc(100dvh-3.5rem)] w-full max-w-[1480px] flex-col px-4 sm:px-6 lg:px-8">
       <div className="grid flex-1 min-h-0 grid-cols-1 gap-6 py-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         {/* ---------- conversation column ---------- */}
@@ -338,13 +364,14 @@ export function ChatShell({ defaultSaver }: { defaultSaver?: string } = {}) {
         </aside>
       </div>
 
-      {/* mobile rail — below conversation */}
+      {/* mobile rail, below conversation */}
       {rail.length > 0 ? (
         <div className="border-t border-border pb-4 pt-3 lg:hidden">
           <ListingsRail items={rail} defaultSaver={defaultSaver} />
         </div>
       ) : null}
     </div>
+    </RailMapContext.Provider>
   )
 }
 

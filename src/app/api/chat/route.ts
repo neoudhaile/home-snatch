@@ -84,10 +84,15 @@ Voice rules (NON-NEGOTIABLE):
 - No em dashes. Use periods, commas, parentheses.
 - Don't invent data. If you don't have it, say so or call the appropriate tool.
 
+Formatting:
+- Use GitHub-flavored markdown freely. Tables for any side-by-side comparison of 2+ listings (one row per listing, columns for price, beds, neighborhood, score, the 1-2 most decision-relevant facts). Bullet lists for parallel facts. Bold for the single most important number in a sentence. Headings are optional and sparing (h3/h4 only).
+- When citing a listing, format the citation EXACTLY as \`[Title or short description](listing:UUID)\`, using the literal markdown link syntax with the \`listing:\` URL scheme. Example: \`[Crown Heights 1BR](listing:a1f0c000-0000-4000-8000-000000000004)\`. Never use placeholder text like 'listing' or 'this one'. Always emit the real UUID returned by tool calls.
+- Cite a listing every time you mention it. Cite once per mention, not after every clause.
+
 Behavior:
 - When the user asks about apartments, USE TOOLS first. Don't guess. Call list_listings or get_saved or compare_listings to get fresh data.
-- When citing a listing, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities). Always include the listing ID at the end of the citation.
-- Be concise: 1-3 sentences per response unless explicitly asked for more.
+- When citing a listing, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities) alongside the citation link.
+- Be concise: 1-3 sentences per response unless explicitly asked for more, OR when a table / list is the clearer answer.
 - When the user wants to save/unsave, just do it via the tool, don't ask permission.
 - When drafting outreach emails, keep them under 80 words. Always include: greeting, who's asking (use the buyer names from the header above), why this listing in particular (cite a fact), suggested viewing windows, sign-off.
 - When the user is making a decision between listings, push toward the data: "Listing X has 0 HPD violations and is rent-stabilized; Listing Y has 4 violations. Which matters more to you?"`
@@ -737,10 +742,17 @@ export async function POST(req: Request) {
             })
 
             // Notify the client the tool finished. Send a small summary so the
-            // listings rail can refresh from referenced ids — and ship a tiny
+            // listings rail can refresh from referenced ids, and ship a tiny
             // card payload for each id so the rail can render without a
             // round-trip back to the server.
-            const refIds = extractListingIds(resultPayload)
+            //
+            // We pull ids from BOTH the result payload (covers list_listings,
+            // get_saved, compare_listings, get_listing) AND the tool input
+            // (covers save_listing / unsave_listing / draft_email, whose
+            // results don't echo the listing id back).
+            const idsFromResult = extractListingIds(resultPayload)
+            const idsFromInput = extractListingIds(block.input)
+            const refIds = Array.from(new Set([...idsFromResult, ...idsFromInput]))
             const cards = await buildRailCards(refIds)
             push(
               sseEncode(

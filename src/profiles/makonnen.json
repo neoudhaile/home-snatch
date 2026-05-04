@@ -1,31 +1,40 @@
 {
   "slug": "makonnen",
   "name": "Ne'oud Makonnen Haile",
-  "budget_min": null,
-  "budget_max": null,
+  "_note": "Edit via /setup wizard or in this file directly.",
+  "budget_min": 2400,
+  "budget_max": 4200,
   "beds_min": 1,
   "beds_max": 2,
-  "must_have": ["FILL_ME"],
-  "nice_to_have": ["FILL_ME"],
-  "deal_breakers": ["FILL_ME"],
+  "must_have": ["separate-bedroom", "natural-light"],
+  "nice_to_have": ["in-unit-laundry", "dishwasher", "no-broker-fee", "outdoor-space"],
+  "deal_breakers": ["ground-floor", "shared-bathroom", "no-windows-bedroom"],
   "vibes": {
-    "quiet": null,
-    "walkable": null,
-    "trendy": null,
-    "cafes": null,
-    "nightlife": null,
-    "greenness": null,
-    "family_friendly": null
+    "quiet": 5,
+    "walkable": 8,
+    "trendy": 7,
+    "cafes": 7,
+    "nightlife": 7,
+    "greenness": 5,
+    "family_friendly": 3
   },
   "commute": [
     {
-      "to": "FILL_ME",
-      "lat": null,
-      "lng": null,
-      "max_minutes": null,
+      "to": "Midtown",
+      "lat": 40.758,
+      "lng": -73.9855,
+      "max_minutes": 40,
       "modes": ["subway", "walk"]
     }
   ],
-  "preferred_areas": ["FILL_ME"],
-  "notes": "FILL_ME"
+  "preferred_areas": [
+    "Williamsburg",
+    "Bushwick",
+    "Crown Heights",
+    "Bed-Stuy",
+    "East Village",
+    "Lower East Side",
+    "Greenpoint"
+  ],
+  "notes": "Friend / co-tenant. Likes neighborhood spots, doesn't need quiet, fine with smaller bedroom if it means more shared space."
 }

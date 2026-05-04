@@ -47,6 +47,11 @@ export const SOURCES = [
   'zillow',
   'trulia',
   'apartments',
+  'realtor',
+  'redfin',
+  'hotpads',
+  'renthop',
+  'twitter',
   'manual',
 ] as const
 export type Source = (typeof SOURCES)[number]

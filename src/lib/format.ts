@@ -59,6 +59,11 @@ const SOURCE_LABEL: Record<string, string> = {
   zillow: 'Zillow',
   trulia: 'Trulia',
   apartments: 'Apartments.com',
+  realtor: 'Realtor.com',
+  redfin: 'Redfin',
+  hotpads: 'HotPads',
+  renthop: 'RentHop',
+  twitter: 'Twitter/X',
   manual: 'Pasted',
 }
 

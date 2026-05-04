@@ -1,11 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { Check, Copy, Loader2, Wrench } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { ChatMessage, ContentBlock } from '@/lib/chat-state'
+import { ChatMarkdown } from './markdown'
 
 /* ---------------------------- public types ------------------------------ */
 
@@ -63,123 +63,191 @@ function AssistantBubble({
       ? [{ type: 'text', text: content }]
       : (content as ContentBlock[])
 
-  // Pair tool_use events from the SDK stream with their results so we render
-  // a single chip per call. Live events (toolEvents) take precedence over
-  // saved blocks because the saved blocks may not have a paired result yet.
-  const liveUses = toolEvents.filter((e) => e.kind === 'use') as Extract<ToolEvent, { kind: 'use' }>[]
   const liveResults = toolEvents.filter((e) => e.kind === 'result') as Extract<
     ToolEvent,
     { kind: 'result' }
   >[]
+  const liveUses = toolEvents.filter((e) => e.kind === 'use') as Extract<
+    ToolEvent,
+    { kind: 'use' }
+  >[]
+
+  // Tool chips render as a small rail BELOW the prose. We collect every
+  // tool_use we know about (from saved blocks + live events), dedup by id,
+  // and pair each with its matching result if it has landed.
+  const persistedUses: Array<{
+    id: string
+    name: string
+    input?: unknown
+  }> = []
+  const seen = new Set<string>()
+  for (const b of blocks) {
+    if (b.type === 'tool_use' && !seen.has(b.id)) {
+      persistedUses.push({ id: b.id, name: b.name, input: b.input })
+      seen.add(b.id)
+    }
+  }
+  for (const u of liveUses) {
+    if (!seen.has(u.id)) {
+      persistedUses.push({ id: u.id, name: u.name, input: u.input })
+      seen.add(u.id)
+    }
+  }
+
+  // Reload-survival: pull tool_result blocks out of the saved content so
+  // chips show "Searched listings · 12" instead of a perma-spinner after
+  // a hard reload (where there are no live SSE events).
+  const persistedResults: Array<{
+    id: string
+    name: string
+    ok: boolean
+    ids: string[]
+  }> = []
+  type ParsedToolResult = { ok?: boolean; ids?: unknown; name?: string }
+  for (const b of blocks) {
+    if (b.type !== 'tool_result') continue
+    let parsed: ParsedToolResult = {}
+    if (typeof b.content === 'string') {
+      try {
+        const raw = JSON.parse(b.content) as unknown
+        if (raw && typeof raw === 'object') parsed = raw as ParsedToolResult
+      } catch {
+        /* leave empty */
+      }
+    }
+    const matchedUse = persistedUses.find((u) => u.id === b.tool_use_id)
+    const rawIds = parsed.ids
+    persistedResults.push({
+      id: b.tool_use_id,
+      name: matchedUse?.name ?? parsed.name ?? 'tool',
+      ok: !b.is_error,
+      ids: Array.isArray(rawIds)
+        ? (rawIds as unknown[]).filter((s): s is string => typeof s === 'string')
+        : [],
+    })
+  }
+  // Live results win over persisted (e.g. mid-stream we get fresher info).
+  const allResultsById = new Map<string, (typeof persistedResults)[number]>()
+  for (const r of persistedResults) allResultsById.set(r.id, r)
+  for (const r of liveResults) allResultsById.set(r.id, r)
+  const allResults = [...allResultsById.values()]
+
+  const textBlocks = blocks.filter(
+    (b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text',
+  )
 
   return (
     <div className="flex justify-start">
-      <div className="max-w-[88%] space-y-2">
-        {blocks.map((b, i) => {
-          if (b.type === 'text') {
-            const text = b.text.trim()
-            if (!text) return null
-            return <TextBlockView key={i} text={b.text} />
-          }
-          if (b.type === 'tool_use') {
-            const result = liveResults.find((r) => r.id === b.id)
+      <div className="max-w-[88%] min-w-0 space-y-2">
+        {textBlocks.map((b, i) => {
+          const text = b.text
+          if (!text || !text.trim()) return null
+          // Cheap email-card heuristic still wins over markdown so the Copy
+          // button stays useful for outreach drafting.
+          const emailMatch = parseDraftEmail(text)
+          if (emailMatch) {
             return (
-              <ToolChip
-                key={`tu-${b.id}`}
-                name={b.name}
-                done={!!result}
-                ok={result?.ok ?? true}
-                count={result?.ids.length}
+              <DraftEmailCard
+                key={`em-${i}`}
+                subject={emailMatch.subject}
+                body={emailMatch.body}
+                prefix={emailMatch.prefix}
               />
             )
           }
-          return null
+          return (
+            <div
+              key={`t-${i}`}
+              className="rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3"
+            >
+              <ChatMarkdown text={text} />
+            </div>
+          )
         })}
 
-        {/* Live tool events for this turn: render any not yet baked into the
-            persisted blocks. Useful while the message is still streaming. */}
-        {liveUses
-          .filter((u) => !blocks.some((b) => b.type === 'tool_use' && b.id === u.id))
-          .map((u) => {
-            const result = liveResults.find((r) => r.id === u.id)
-            return (
-              <ToolChip
-                key={`live-${u.id}`}
-                name={u.name}
-                done={!!result}
-                ok={result?.ok ?? true}
-                count={result?.ids.length}
-              />
-            )
-          })}
+        {persistedUses.length > 0 ? (
+          <ToolChipRail
+            uses={persistedUses}
+            results={allResults}
+            streaming={isStreaming}
+          />
+        ) : null}
       </div>
     </div>
   )
 }
 
-/* ---------------------------- text rendering --------------------------- */
-
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}/gi
-
-function TextBlockView({ text }: { text: string }) {
-  // Detect a "Subject:" + body that looks like a drafted email. Render it as a
-  // styled card with a Copy button. Cheap heuristic; covers the common shape.
-  const emailMatch = parseDraftEmail(text)
-  if (emailMatch) {
-    return (
-      <DraftEmailCard
-        subject={emailMatch.subject}
-        body={emailMatch.body}
-        prefix={emailMatch.prefix}
-      />
-    )
-  }
-
-  return (
-    <div className="rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3 text-[14px] leading-relaxed text-card-foreground">
-      <p className="whitespace-pre-wrap">{linkifyListingIds(text)}</p>
-    </div>
-  )
-}
-
-/**
- * Replace any UUID that looks like a listing id with a small inline link. This
- * makes "...this listing (a1f0c...0001)" actionable.
- */
-function linkifyListingIds(text: string): React.ReactNode[] {
-  const out: React.ReactNode[] = []
-  let last = 0
-  let i = 0
-  for (const m of text.matchAll(UUID_RE)) {
-    const start = m.index ?? 0
-    if (start > last) out.push(text.slice(last, start))
-    const id = m[0]
-    out.push(
-      <Link
-        key={`${id}-${i++}`}
-        href={`/listing/${id}`}
-        className="tabular cursor-pointer rounded-md border border-border bg-surface-2 px-1.5 py-0.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-secondary"
-      >
-        listing
-      </Link>,
-    )
-    last = start + id.length
-  }
-  if (last < text.length) out.push(text.slice(last))
-  return out
-}
-
-/* ---------------------------- tool chip -------------------------------- */
+/* ---------------------------- tool chips -------------------------------- */
 
 const TOOL_LABELS: Record<string, { running: string; done: string }> = {
-  list_listings: { running: 'Searching listings', done: 'Found listings' },
+  list_listings: { running: 'Searching listings', done: 'Searched listings' },
   get_listing: { running: 'Reading listing', done: 'Read listing' },
-  save_listing: { running: 'Saving', done: 'Saved' },
-  unsave_listing: { running: 'Removing', done: 'Removed' },
+  save_listing: { running: 'Saving', done: 'Saved listing' },
+  unsave_listing: { running: 'Removing', done: 'Removed listing' },
   get_saved: { running: 'Fetching saved', done: 'Loaded saved' },
   compare_listings: { running: 'Comparing', done: 'Compared' },
   get_profile_summary: { running: 'Reading profile', done: 'Read profile' },
   draft_email: { running: 'Drafting email', done: 'Drafted email' },
+}
+
+function humanizeTool(name: string, done: boolean): string {
+  const labels = TOOL_LABELS[name]
+  if (labels) return done ? labels.done : labels.running
+  // Fallback: snake_case -> "Snake case"
+  const pretty = name.replace(/_/g, ' ')
+  return pretty.charAt(0).toUpperCase() + pretty.slice(1)
+}
+
+function suffixForResult(
+  name: string,
+  count: number | undefined,
+): string {
+  if (typeof count !== 'number' || count < 0) return ''
+  if (count === 0) return ' · 0 found'
+  switch (name) {
+    case 'list_listings':
+      return ` · ${count} found`
+    case 'get_saved':
+      return ` · ${count} saved`
+    case 'compare_listings':
+      return ` · ${count} compared`
+    case 'save_listing':
+    case 'unsave_listing':
+    case 'get_listing':
+    case 'draft_email':
+    case 'get_profile_summary':
+      return ''
+    default:
+      return ` · ${count}`
+  }
+}
+
+function ToolChipRail({
+  uses,
+  results,
+  streaming,
+}: {
+  uses: Array<{ id: string; name: string; input?: unknown }>
+  results: Array<{ id: string; name: string; ok: boolean; ids: string[] }>
+  streaming: boolean
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 px-1 pt-0.5">
+      {uses.map((u) => {
+        const r = results.find((x) => x.id === u.id)
+        return (
+          <ToolChip
+            key={u.id}
+            name={u.name}
+            done={!!r}
+            ok={r?.ok ?? true}
+            count={r?.ids.length}
+            streaming={streaming && !r}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 function ToolChip({
@@ -187,35 +255,36 @@ function ToolChip({
   done,
   ok,
   count,
+  streaming,
 }: {
   name: string
   done: boolean
   ok: boolean
   count?: number
+  streaming?: boolean
 }) {
-  const labels = TOOL_LABELS[name] ?? { running: name, done: name }
-  const text = done ? labels.done : labels.running
-  const countSuffix =
-    done && typeof count === 'number' && count > 0 ? ` · ${count}` : ''
+  const text = humanizeTool(name, done) + (done ? suffixForResult(name, count) : '')
   return (
-    <div
+    <span
       className={cn(
-        'tabular inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium',
+        'tabular inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5',
+        'text-[11px] font-medium',
         done
           ? ok
-            ? 'border-border bg-surface-2 text-foreground/80'
+            ? 'border-border bg-surface-2 text-muted-foreground'
             : 'border-destructive/30 bg-destructive/5 text-destructive'
           : 'border-border bg-surface-2 text-muted-foreground',
       )}
+      aria-live={streaming ? 'polite' : 'off'}
     >
       {done ? (
-        <Check className="h-3 w-3" aria-hidden />
+        <Check className="h-2.5 w-2.5" aria-hidden />
       ) : (
-        <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+        <Loader2 className="h-2.5 w-2.5 animate-spin" aria-hidden />
       )}
-      <Wrench className="h-3 w-3 opacity-60" aria-hidden />
-      <span>{text}{countSuffix}</span>
-    </div>
+      <Wrench className="h-2.5 w-2.5 opacity-50" aria-hidden />
+      <span>{text}</span>
+    </span>
   )
 }
 
@@ -259,8 +328,8 @@ function DraftEmailCard({
   return (
     <div className="space-y-2">
       {prefix ? (
-        <div className="rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3 text-[14px] leading-relaxed text-card-foreground">
-          <p className="whitespace-pre-wrap">{prefix}</p>
+        <div className="rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3">
+          <ChatMarkdown text={prefix} />
         </div>
       ) : null}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
