@@ -24,9 +24,9 @@ export function EmptyState({
             ø
           </span>
         </div>
-        <h2 className="serif text-[28px] italic leading-tight tracking-tight text-foreground">
+        <h1 className="serif text-[28px] italic leading-tight tracking-tight text-foreground">
           {title}
-        </h2>
+        </h1>
         <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
           {body}
         </p>
@@ -36,13 +36,13 @@ export function EmptyState({
             className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
           >
             {primary.label}
-            <ArrowRight className="h-3.5 w-3.5" />
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
           </Link>
           <Link
             href={secondary.href}
             className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-4 text-[13px] font-medium text-foreground transition-colors hover:bg-secondary"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-3.5 w-3.5" aria-hidden />
             {secondary.label}
           </Link>
         </div>

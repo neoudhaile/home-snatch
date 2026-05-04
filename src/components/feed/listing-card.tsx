@@ -221,7 +221,7 @@ function PhotoMissing() {
   return (
     <div className="absolute inset-0 grid place-items-center bg-[linear-gradient(135deg,oklch(0.95_0.008_210),oklch(0.92_0.012_220))] dark:bg-[linear-gradient(135deg,oklch(0.27_0.014_220),oklch(0.22_0.014_220))]">
       <div className="flex flex-col items-center gap-1.5 text-muted-foreground">
-        <MapPin className="h-5 w-5 opacity-60" />
+        <MapPin className="h-5 w-5 opacity-60" aria-hidden />
         <span className="text-[11px]">No photo</span>
       </div>
     </div>
@@ -324,7 +324,10 @@ function MetaRow({
       </div>
       {/* Hover-revealed contact CTAs (featured + wide only) */}
       {!compact ? (
-        <div className="hidden translate-y-1 items-center gap-1 opacity-0 transition-[opacity,transform] duration-300 ease-out group-hover:translate-y-0 group-hover:opacity-100 sm:flex">
+        <div
+          aria-hidden
+          className="hidden translate-y-1 items-center gap-1 opacity-0 transition-[opacity,transform] duration-300 ease-out group-hover:translate-y-0 group-hover:opacity-100 sm:flex"
+        >
           {listing.contact?.phone ? (
             <span className="grid h-7 w-7 place-items-center rounded-full bg-secondary text-muted-foreground">
               <Phone className="h-3.5 w-3.5" />

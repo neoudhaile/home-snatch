@@ -68,7 +68,10 @@ export function AskBox({ listingId }: { listingId: string }) {
   return (
     <section className="rounded-2xl border border-border bg-card p-5">
       <header className="mb-3 flex items-center gap-2">
-        <span className="grid h-6 w-6 place-items-center rounded-full bg-secondary text-foreground">
+        <span
+          aria-hidden
+          className="grid h-6 w-6 place-items-center rounded-full bg-secondary text-foreground"
+        >
           <Sparkles className="h-3.5 w-3.5" />
         </span>
         <h3 className="text-[13px] font-medium text-foreground">
@@ -80,6 +83,7 @@ export function AskBox({ listingId }: { listingId: string }) {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           rows={3}
+          aria-label="Ask about this listing"
           placeholder="Is the F train reliable from here? What's the closest grocery store?"
           className="min-h-[88px] resize-none border-border bg-surface-2 pr-12 text-[14px] placeholder:text-muted-foreground"
           onKeyDown={(e) => {
@@ -101,7 +105,7 @@ export function AskBox({ listingId }: { listingId: string }) {
             busy && 'animate-pulse',
           )}
         >
-          <Send className="h-3.5 w-3.5" />
+          <Send className="h-3.5 w-3.5" aria-hidden />
         </button>
       </div>
       {response ? (

@@ -1,10 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { Bookmark, Plus, SlidersHorizontal } from 'lucide-react'
+import { Bookmark, MessageCircle, Plus, SlidersHorizontal } from 'lucide-react'
 import { ThemeToggle } from './theme-toggle'
 import { FreshnessSelector } from './freshness-selector'
 import { SourceFilter } from './source-filter'
+import { SearchInput } from './search-input'
 import type { Source } from '@/types'
 
 export type HeaderState = {
@@ -17,11 +18,15 @@ export function Header({
   onChange,
   savedCount = 0,
   showFilters = true,
+  showSearch = true,
+  initialQuery,
 }: {
   state: HeaderState
   onChange: (next: HeaderState) => void
   savedCount?: number
   showFilters?: boolean
+  showSearch?: boolean
+  initialQuery?: string
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -44,9 +49,20 @@ export function Header({
           />
         </Link>
 
-        {/* Filters cluster: center on desktop */}
+        {/* Center: search (prominent, desktop only — mobile gets its own row below) */}
+        {showSearch ? (
+          <div className="hidden flex-1 justify-center px-4 md:flex">
+            <div className="w-full max-w-[520px]">
+              <SearchInput initialQuery={initialQuery} />
+            </div>
+          </div>
+        ) : (
+          <div className="hidden flex-1 md:block" />
+        )}
+
+        {/* Filters cluster: desktop, sits to the right of search */}
         {showFilters ? (
-          <div className="ml-2 hidden items-center gap-2 md:flex">
+          <div className="hidden items-center gap-2 md:flex">
             <FreshnessSelector
               value={state.freshness}
               onChange={(freshness) => onChange({ ...state, freshness })}
@@ -59,13 +75,13 @@ export function Header({
         ) : null}
 
         {/* Right cluster */}
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1.5 md:ml-0">
           <Link
             href="/add"
             aria-label="Add a listing by URL"
             className="tabular inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-secondary"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-3.5 w-3.5" aria-hidden />
             <span className="hidden sm:inline">Paste URL</span>
           </Link>
           <Link
@@ -73,15 +89,23 @@ export function Header({
             aria-label="Open setup"
             className="tabular hidden h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-secondary md:inline-flex"
           >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
+            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
             <span>Setup</span>
+          </Link>
+          <Link
+            href="/chat"
+            aria-label="Chat assistant"
+            className="tabular inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-secondary"
+          >
+            <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+            <span className="hidden sm:inline">Chat</span>
           </Link>
           <Link
             href="/saved"
             aria-label="Saved listings"
             className="tabular relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-secondary"
           >
-            <Bookmark className="h-3.5 w-3.5" />
+            <Bookmark className="h-3.5 w-3.5" aria-hidden />
             <span>Saved</span>
             <span className="tabular ml-0.5 text-muted-foreground">{savedCount}</span>
           </Link>
@@ -89,7 +113,12 @@ export function Header({
         </div>
       </div>
 
-      {/* Mobile filter row */}
+      {/* Mobile: full-width search below the wordmark, then filter row */}
+      {showSearch ? (
+        <div className="px-4 pb-2 sm:px-6 md:hidden">
+          <SearchInput initialQuery={initialQuery} />
+        </div>
+      ) : null}
       {showFilters ? (
         <div className="flex items-center gap-2 overflow-x-auto px-4 pb-2 sm:px-6 md:hidden">
           <FreshnessSelector

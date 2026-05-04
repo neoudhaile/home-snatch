@@ -958,6 +958,115 @@ const mocks: Mock[] = [
 export type FeedFilters = {
   freshnessDays?: 1 | 7 | 14 | 30
   sources?: Source[]
+  // ── extended filters (additive — populated by NL search) ────────────
+  /** Inclusive lower bound on `price_monthly`. */
+  priceMin?: number
+  /** Inclusive upper bound on `price_monthly`. */
+  priceMax?: number
+  /** Inclusive lower bound on bedrooms (0 = studio). */
+  bedsMin?: number
+  /** Inclusive upper bound on bedrooms. */
+  bedsMax?: number
+  /** Restrict to listings whose `borough` matches one of these (case-insensitive). */
+  boroughs?: string[]
+  /** Restrict to listings whose `neighborhood` matches one of these (case-insensitive substring). */
+  neighborhoods?: string[]
+  /** All listed amenities must be present (case-insensitive substring vs `amenities`). */
+  mustHave?: string[]
+  /** True → drop anything without `application.broker_fee_pct === 0` or "no broker fee" text. */
+  noBrokerFee?: boolean
+  /** True → drop anything without `rent_stabilized === true`. */
+  rentStabilizedOnly?: boolean
+  /** True → drop anything without `pet_friendly === true`. */
+  petFriendly?: boolean
+  /** True → drop anything without `furnished === true`. */
+  furnished?: boolean
+  /** Free-text AND-match across title + description + amenities + neighborhood. */
+  keywords?: string[]
+  /** Original NL query, surfaced for highlighting / banner rendering. */
+  query?: string
+}
+
+/**
+ * Apply the additive filter fields above on top of an already-fetched
+ * RankedListing[]. The base data layer (`listing-helpers.getRankedFeed`)
+ * doesn't know about these — we apply in JS so the contract there stays
+ * stable.
+ */
+function applyExtendedFilters(rows: RankedListing[], opts: FeedFilters): RankedListing[] {
+  let out = rows
+  if (opts.priceMin != null) {
+    const min = opts.priceMin
+    out = out.filter((l) => l.price_monthly != null && l.price_monthly >= min)
+  }
+  if (opts.priceMax != null) {
+    const max = opts.priceMax
+    out = out.filter((l) => l.price_monthly != null && l.price_monthly <= max)
+  }
+  if (opts.bedsMin != null || opts.bedsMax != null) {
+    const min = opts.bedsMin ?? -Infinity
+    const max = opts.bedsMax ?? Infinity
+    out = out.filter((l) => {
+      if (l.beds == null) return false
+      const b = typeof l.beds === 'string' ? Number.parseFloat(l.beds) : (l.beds as unknown as number)
+      if (Number.isNaN(b)) return false
+      return b >= min && b <= max
+    })
+  }
+  if (opts.boroughs && opts.boroughs.length > 0) {
+    const allowed = new Set(opts.boroughs.map((b) => b.toLowerCase()))
+    out = out.filter((l) => l.borough != null && allowed.has(l.borough.toLowerCase()))
+  }
+  if (opts.neighborhoods && opts.neighborhoods.length > 0) {
+    const needles = opts.neighborhoods.map((n) => n.toLowerCase())
+    out = out.filter((l) => {
+      if (!l.neighborhood) return false
+      const hay = l.neighborhood.toLowerCase()
+      return needles.some((n) => hay.includes(n) || n.includes(hay))
+    })
+  }
+  if (opts.mustHave && opts.mustHave.length > 0) {
+    const needles = opts.mustHave.map((m) => m.toLowerCase())
+    out = out.filter((l) => {
+      const have = (l.amenities ?? []).map((a) => a.toLowerCase())
+      return needles.every((n) => have.some((h) => h.includes(n) || n.includes(h)))
+    })
+  }
+  if (opts.noBrokerFee) {
+    out = out.filter((l) => {
+      const a = l.application
+      if (!a) return false
+      if (a.broker_fee_pct === 0) return true
+      if (a.broker_fee_text && /no\s*broker\s*fee/i.test(a.broker_fee_text)) return true
+      return false
+    })
+  }
+  if (opts.rentStabilizedOnly) {
+    out = out.filter((l) => l.rent_stabilized === true)
+  }
+  if (opts.petFriendly) {
+    out = out.filter((l) => l.pet_friendly === true)
+  }
+  if (opts.furnished) {
+    out = out.filter((l) => l.furnished === true)
+  }
+  if (opts.keywords && opts.keywords.length > 0) {
+    const needles = opts.keywords.map((k) => k.toLowerCase()).filter((k) => k.length > 0)
+    if (needles.length > 0) {
+      out = out.filter((l) => {
+        const hay = [
+          l.title ?? '',
+          l.description ?? '',
+          (l.amenities ?? []).join(' '),
+          l.neighborhood ?? '',
+        ]
+          .join(' ')
+          .toLowerCase()
+        return needles.every((n) => hay.includes(n))
+      })
+    }
+  }
+  return out
 }
 
 export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListing[]> {
@@ -967,7 +1076,7 @@ export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListi
         freshness_days: opts.freshnessDays,
         sources: opts.sources,
       })
-      if (rows.length > 0) return rows
+      if (rows.length > 0) return applyExtendedFilters(rows, opts)
       // Empty DB → fall through to mocks so design-time isn't a blank page.
     } catch (err) {
       console.warn('[feed-data] DB read failed, falling back to mocks:', (err as Error).message)
@@ -983,7 +1092,8 @@ export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListi
     if (b.score.score !== a.score.score) return b.score.score - a.score.score
     return (a.freshness_hours ?? 0) - (b.freshness_hours ?? 0)
   })
-  return filtered as unknown as RankedListing[]
+  const ranked = filtered as unknown as RankedListing[]
+  return applyExtendedFilters(ranked, opts)
 }
 
 export async function getListing(id: string): Promise<RankedListing | null> {

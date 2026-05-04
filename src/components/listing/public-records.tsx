@@ -54,7 +54,10 @@ function RecordTile({
   return (
     <div className="rounded-xl border border-border bg-surface-2 p-3">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
-        <span className={`grid h-5 w-5 place-items-center rounded-full ${toneClass}`}>
+        <span
+          aria-hidden
+          className={`grid h-5 w-5 place-items-center rounded-full ${toneClass}`}
+        >
           {icon}
         </span>
         {label}

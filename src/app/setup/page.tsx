@@ -100,7 +100,7 @@ export default function SetupPage() {
           href="/"
           className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
           Skip setup
         </Link>
 
@@ -312,7 +312,7 @@ function NavRow({
         disabled={step === 0 || submitting}
         className="h-9 cursor-pointer rounded-full px-4 text-[13px]"
       >
-        <ArrowLeft className="h-3.5 w-3.5" />
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
         Back
       </Button>
       <Button
@@ -322,18 +322,18 @@ function NavRow({
       >
         {submitting ? (
           <>
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            Saving...
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            Saving…
           </>
         ) : isLast ? (
           <>
             Save and continue
-            <Check className="h-3.5 w-3.5" />
+            <Check className="h-3.5 w-3.5" aria-hidden />
           </>
         ) : (
           <>
             Continue
-            <ArrowRight className="h-3.5 w-3.5" />
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
           </>
         )}
       </Button>
@@ -352,9 +352,9 @@ function WhoStep({
 }) {
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Who's setting up?
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Profiles drive the ranking. If both of you are hunting together, set up both
         and we reconcile.
@@ -433,15 +433,19 @@ function BasicsStep({
 }) {
   return (
     <div className="space-y-7">
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         The basics.
-      </h2>
+      </h1>
 
       <div>
-        <label className="mb-2 block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+        <label
+          htmlFor="setup-name"
+          className="mb-2 block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground"
+        >
           Name
         </label>
         <input
+          id="setup-name"
           type="text"
           value={profile.name}
           onChange={(e) => onPatch({ name: e.target.value })}
@@ -450,20 +454,22 @@ function BasicsStep({
       </div>
 
       <div className="space-y-3">
-        <label className="block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+        <span className="block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
           Budget per month
-        </label>
+        </span>
         <div className="flex items-center gap-3">
           <NumberInput
             value={profile.budget_min}
             onChange={(budget_min) => onPatch({ budget_min })}
             prefix="$"
+            ariaLabel="Minimum budget"
           />
           <span className="text-muted-foreground">to</span>
           <NumberInput
             value={profile.budget_max}
             onChange={(budget_max) => onPatch({ budget_max })}
             prefix="$"
+            ariaLabel="Maximum budget"
           />
         </div>
         <Slider
@@ -479,9 +485,9 @@ function BasicsStep({
       </div>
 
       <div className="space-y-3">
-        <label className="block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+        <span className="block text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
           Bedrooms (pick what you'd consider)
-        </label>
+        </span>
         <div className="flex flex-wrap gap-2">
           {BED_OPTIONS.map((b) => (
             <Chip
@@ -508,10 +514,12 @@ function NumberInput({
   value,
   onChange,
   prefix,
+  ariaLabel,
 }: {
   value: number
   onChange: (v: number) => void
   prefix?: string
+  ariaLabel?: string
 }) {
   return (
     <div className="relative">
@@ -523,6 +531,7 @@ function NumberInput({
       <input
         type="number"
         value={value}
+        aria-label={ariaLabel}
         onChange={(e) => onChange(Math.max(0, Number(e.target.value || 0)))}
         className={cn(
           'tabular block w-32 rounded-xl border border-border bg-surface-2 py-2.5 text-[15px] font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -549,9 +558,9 @@ function ChipPicker({
   const [custom, setCustom] = useState('')
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         {title}.
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         {subtitle}
       </p>
@@ -577,6 +586,7 @@ function ChipPicker({
         <input
           type="text"
           placeholder="Add your own"
+          aria-label={`Add a custom ${title.toLowerCase()}`}
           value={custom}
           onChange={(e) => setCustom(e.target.value)}
           onKeyDown={(e) => {
@@ -598,7 +608,7 @@ function ChipPicker({
           }}
           className="h-9 cursor-pointer rounded-full px-3 text-[12px]"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-3.5 w-3.5" aria-hidden />
           Add
         </Button>
       </div>
@@ -615,9 +625,9 @@ function VibesStep({
 }) {
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Neighborhood vibe.
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Slide each from 0 (don't care) to 10 (matters a lot). We compute these from
         public NYC data: Parks, 311, SLA, street network.
@@ -653,9 +663,9 @@ function CommuteStep({
   const MODES: Array<'subway' | 'walk' | 'bike'> = ['subway', 'walk', 'bike']
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Commute targets.
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Where do you go often? Each address gets a separate ranking signal.
       </p>
@@ -671,6 +681,7 @@ function CommuteStep({
                 value={c.to}
                 onChange={(e) => onUpdate(i, { to: e.target.value })}
                 placeholder="Address or place name"
+                aria-label={`Destination ${i + 1}`}
                 className="flex-1 rounded-xl border border-border bg-surface-2 px-3 py-2 text-[14px] text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               />
               <button
@@ -679,7 +690,7 @@ function CommuteStep({
                 aria-label="Remove destination"
                 className="grid h-9 w-9 cursor-pointer place-items-center rounded-full border border-border bg-surface-2 text-muted-foreground transition-colors hover:text-foreground"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden />
               </button>
             </div>
             <Slider
@@ -722,7 +733,7 @@ function CommuteStep({
           onClick={onAdd}
           className="h-9 cursor-pointer rounded-full px-4 text-[13px]"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-3.5 w-3.5" aria-hidden />
           Add destination
         </Button>
       </div>
@@ -739,9 +750,9 @@ function AreasStep({
 }) {
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Preferred areas.
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Pick neighborhoods you'd actually live in. Skip if no preference.
       </p>
@@ -779,9 +790,9 @@ function NotesStep({
 }) {
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Anything else?
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Free-form notes the agent sees on every score. Constraints, soft preferences,
         weird requirements: write whatever helps.
@@ -790,6 +801,7 @@ function NotesStep({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={8}
+        aria-label="Free-form notes"
         className="mt-6 block w-full resize-none rounded-2xl border border-border bg-surface-2 p-4 text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         placeholder="e.g., I work nights so I'd rather be on a quiet block; we're cat people; ground floor is fine if there's a stoop and a deadbolt; no broker fee unless the unit is unusually well-priced..."
       />
@@ -807,9 +819,9 @@ function ReviewStep({ state }: { state: ReturnType<typeof initialWizardState> })
 
   return (
     <div>
-      <h2 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
+      <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Looks right?
-      </h2>
+      </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
         Save to start ranking. You can edit any of this later in <code className="rounded bg-secondary px-1.5 py-0.5 text-[12px]">src/profiles/</code>.
       </p>

@@ -38,9 +38,20 @@ export function VibeBars({ vibe }: { vibe: NeighborhoodVibe | null | undefined }
     >
       <div className="space-y-2">
         {rows.map((r) => (
-          <div key={r.key} className="grid grid-cols-[80px_1fr_42px] items-center gap-3">
+          <div
+            key={r.key}
+            title={r.source}
+            className="grid grid-cols-[80px_1fr_42px] items-center gap-3"
+          >
             <span className="text-[12px] text-foreground/80">{r.label}</span>
-            <div className="relative h-1.5 overflow-hidden rounded-full bg-secondary">
+            <div
+              role="meter"
+              aria-label={`${r.label} score`}
+              aria-valuenow={Math.round(r.value * 100)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="relative h-1.5 overflow-hidden rounded-full bg-secondary"
+            >
               <span
                 className="absolute inset-y-0 left-0 rounded-full bg-foreground/80"
                 style={{ width: `${Math.round(r.value * 100)}%` }}
@@ -54,7 +65,7 @@ export function VibeBars({ vibe }: { vibe: NeighborhoodVibe | null | undefined }
         ))}
       </div>
       <p className="mt-3 border-t border-border pt-3 text-[11px] leading-relaxed text-muted-foreground">
-        Computed from public NYC datasets. Hover any row in v1 to see the source.
+        Computed from public NYC datasets. Hover a row to see the source.
       </p>
     </SectionCard>
   )

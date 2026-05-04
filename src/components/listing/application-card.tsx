@@ -45,7 +45,10 @@ export function ApplicationCard({ application }: { application: Application | nu
                   key={doc}
                   className="flex items-center gap-2 text-[13px] text-foreground"
                 >
-                  <span className="grid h-4 w-4 place-items-center rounded-sm border border-border bg-surface-2 text-muted-foreground">
+                  <span
+                    aria-hidden
+                    className="grid h-4 w-4 place-items-center rounded-sm border border-border bg-surface-2 text-muted-foreground"
+                  >
                     <FileText className="h-2.5 w-2.5" />
                   </span>
                   {doc}
@@ -69,7 +72,7 @@ export function ApplicationCard({ application }: { application: Application | nu
             className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
           >
             Apply
-            <ArrowUpRight className="h-3.5 w-3.5" />
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
           </a>
         ) : null}
       </div>

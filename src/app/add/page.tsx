@@ -69,7 +69,7 @@ export default function AddPage() {
           href="/"
           className="mb-5 inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
           Back to feed
         </Link>
 
@@ -89,6 +89,7 @@ export default function AddPage() {
             rows={3}
             placeholder="https://streeteasy.com/building/..."
             disabled={status === 'fetching'}
+            aria-label="Listing URL"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
@@ -99,7 +100,10 @@ export default function AddPage() {
           />
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] text-muted-foreground">
-              ⌘+Enter to extract.
+              Press{' '}
+              <kbd className="rounded border border-border bg-surface-2 px-1 text-[10px]">⌘</kbd>+
+              <kbd className="rounded border border-border bg-surface-2 px-1 text-[10px]">Enter</kbd>{' '}
+              to extract.
             </span>
             <Button
               onClick={ingest}
@@ -108,13 +112,13 @@ export default function AddPage() {
             >
               {status === 'fetching' ? (
                 <>
-                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                  Extracting...
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  Extracting…
                 </>
               ) : (
                 <>
                   Extract
-                  <ArrowRight className="h-3.5 w-3.5" />
+                  <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                 </>
               )}
             </Button>

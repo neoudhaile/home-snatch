@@ -39,7 +39,7 @@ export default async function ListingDetailPage({ params }: Props) {
           href="/"
           className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
           Back to feed
         </Link>
       </div>
@@ -78,7 +78,7 @@ export default async function ListingDetailPage({ params }: Props) {
               ) : null}
               <span className="text-foreground/30">·</span>
               <span className="inline-flex items-center gap-1 text-[14px] text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5" />
+                <MapPin className="h-3.5 w-3.5" aria-hidden />
                 {listing.neighborhood}, {listing.borough}
               </span>
             </div>
@@ -162,7 +162,10 @@ function SubwayPanel({
     <SectionCard title="Where it is" hint={address ?? null}>
       {nearestSubway ? (
         <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-full bg-foreground text-background">
+          <span
+            aria-hidden
+            className="grid h-10 w-10 place-items-center rounded-full bg-foreground text-background"
+          >
             <Train className="h-4 w-4" />
           </span>
           <div className="min-w-0">

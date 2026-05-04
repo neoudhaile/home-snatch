@@ -45,7 +45,7 @@ export function SourceFilter({
         aria-label="Filter by source"
       >
         <span>{label}</span>
-        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-56 p-1">
         <button
@@ -57,7 +57,7 @@ export function SourceFilter({
           )}
         >
           <span>All sources</span>
-          {allActive && <Check className="h-3.5 w-3.5" />}
+          {allActive && <Check className="h-3.5 w-3.5" aria-hidden />}
         </button>
         <div className="my-1 h-px bg-border" />
         {SOURCES.map((s) => {
@@ -73,7 +73,7 @@ export function SourceFilter({
               )}
             >
               <span>{formatSource(s)}</span>
-              {active && <Check className="h-3.5 w-3.5" />}
+              {active && <Check className="h-3.5 w-3.5" aria-hidden />}
             </button>
           )
         })}

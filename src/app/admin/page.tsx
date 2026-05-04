@@ -16,6 +16,15 @@ import { formatDistanceToNow } from 'date-fns'
 import { ActionButton } from '@/components/admin/action-button'
 import { CoverageBars, FreshnessBar } from '@/components/admin/coverage-bars'
 import { DqCard } from '@/components/admin/dq-card'
+import {
+  InsightsAnomalies,
+  InsightsAnomaliesSkeleton,
+} from '@/components/admin/insights-anomalies'
+import { InsightsCleanup } from '@/components/admin/insights-cleanup'
+import {
+  InsightsMarketSummary,
+  InsightsMarketSummarySkeleton,
+} from '@/components/admin/insights-market-summary'
 import { ScoreHistogram } from '@/components/admin/score-histogram'
 import { SourceTable } from '@/components/admin/source-table'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -55,6 +64,29 @@ export default function AdminPage() {
             </ActionButton>
           </div>
         </header>
+
+        {/* AI Insights — additive section; existing DQ widgets remain below. */}
+        <section className="mb-8 space-y-4">
+          <div className="flex items-baseline justify-between">
+            <h2 className="serif text-[22px] italic leading-tight tracking-tight text-foreground">
+              ai insights
+            </h2>
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              market, anomalies, cleanup
+            </span>
+          </div>
+
+          <Suspense fallback={<InsightsMarketSummarySkeleton />}>
+            <InsightsMarketSummary />
+          </Suspense>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Suspense fallback={<InsightsAnomaliesSkeleton />}>
+              <InsightsAnomalies />
+            </Suspense>
+            <InsightsCleanup />
+          </div>
+        </section>
 
         <Suspense fallback={<DashboardSkeleton />}>
           <Dashboard />

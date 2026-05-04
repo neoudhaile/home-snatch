@@ -61,6 +61,8 @@ export function Slider({
           max={max}
           step={step}
           value={value}
+          aria-label={label ?? 'Value'}
+          aria-valuetext={unit ? `${value}${unit}` : String(value)}
           onChange={(e) => onChange(Number(e.target.value))}
           className="absolute inset-0 h-6 w-full cursor-grab appearance-none bg-transparent active:cursor-grabbing
             [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5

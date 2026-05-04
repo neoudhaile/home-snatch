@@ -29,7 +29,7 @@ export function Chip({
       )}
     >
       <span>{children}</span>
-      {active ? <Check className="h-3 w-3" /> : null}
+      {active ? <Check className="h-3 w-3" aria-hidden /> : null}
     </button>
   )
 }

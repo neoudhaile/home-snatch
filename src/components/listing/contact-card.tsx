@@ -70,13 +70,21 @@ export function ContactCard({ contact }: { contact: Contact | null | undefined }
               rel="noopener noreferrer"
               className="text-[13.5px] font-medium text-foreground underline-offset-4 hover:underline"
             >
-              {new URL(contact.website).host}
+              {safeHost(contact.website)}
             </a>
           </Row>
         ) : null}
       </div>
     </SectionCard>
   )
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
 }
 
 function Row({
@@ -97,7 +105,10 @@ function Row({
         highlight ? 'bg-warm/40 dark:bg-warm/30' : '',
       )}
     >
-      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
+      <span
+        aria-hidden
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground"
+      >
         {icon}
       </span>
       <span className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
