@@ -33,6 +33,7 @@ import {
   getKnownSavers,
   joinProfileNames,
 } from '@/lib/profile-set'
+import { runLiveSearch, ALL_LIVE_SOURCES, type LiveSource } from '@/lib/live-search'
 import type { RankedListing } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -91,6 +92,7 @@ Formatting:
 
 Behavior:
 - When the user asks about apartments, USE TOOLS first. Don't guess. Call list_listings or get_saved or compare_listings to get fresh data.
+- Use live_search when the user asks for something the DB might not cover yet — a specific niche neighborhood + amenity combo, very-just-posted listings ("posted in the last hour", "today only"), or when list_listings returns 0 results for a real-sounding query. Don't use it for routine "show me top 5" queries — list_listings is cached and instant; live_search costs creds and 10–60 seconds.
 - When citing a listing, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities) alongside the citation link.
 - Be concise: 1-3 sentences per response unless explicitly asked for more, OR when a table / list is the clearer answer.
 - When the user wants to save/unsave, just do it via the tool, don't ask permission.
@@ -249,6 +251,32 @@ async function buildTools(): Promise<{
       name: 'get_profile_summary',
       description: jointSummaryHint,
       input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'live_search',
+      description:
+        "Run a live, on-demand search across Apify real-estate actors for the user's query — useful when the user asks about something the DB might not have (a specific neighborhood + amenity combo, or 'show me listings posted in the last hour'). Avoid for routine 'show me top 5' queries — use list_listings first. Costs Apify creds and ~10–60s per source. Returns merged + deduped listings, scoring up to 5 newly-found ones inline.",
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'Free-text NL apartment query (e.g. "1br under $3k near Court Square with a dishwasher, posted this week"). Will be parsed for filters.',
+          },
+          sources: {
+            type: 'array',
+            items: { enum: ['zillow', 'streeteasy', 'apartments', 'realtor'] },
+            description:
+              'Optional. Subset of Apify sources to hit. Default = all four.',
+          },
+          max_results_per_source: {
+            type: 'number',
+            description: 'Default 5. Cap per-source row count to keep this cheap.',
+          },
+        },
+        required: ['query'],
+      },
     },
     {
       name: 'draft_email',
@@ -593,6 +621,22 @@ async function runTool(name: string, input: unknown, knownSavers: string[]): Pro
       return tool_compare(input as { ids: string[] })
     case 'get_profile_summary':
       return tool_get_profile_summary()
+    case 'live_search': {
+      const i = input as {
+        query: string
+        sources?: LiveSource[]
+        max_results_per_source?: number
+      }
+      const sources =
+        Array.isArray(i.sources)
+          ? (i.sources.filter((s) => ALL_LIVE_SOURCES.includes(s)) as LiveSource[])
+          : undefined
+      return runLiveSearch({
+        query: i.query,
+        sources,
+        max_results_per_source: i.max_results_per_source,
+      })
+    }
     case 'draft_email':
       return tool_draft_email(input as Parameters<typeof tool_draft_email>[0])
     default:

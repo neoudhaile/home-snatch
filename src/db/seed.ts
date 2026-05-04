@@ -22,12 +22,14 @@ import {
 } from '@/db/schema'
 
 const SOCRATA = 'https://data.cityofnewyork.us/resource'
+const SOCRATA_NY = 'https://data.ny.gov/resource'
 
 /** Page through a Socrata JSON endpoint with $limit/$offset. */
 async function socrataQuery<T>(
   dataset: string,
   params: Record<string, string | number> = {},
-  pageSize = 5_000
+  pageSize = 5_000,
+  host: string = SOCRATA
 ): Promise<T[]> {
   const out: T[] = []
   let offset = 0
@@ -39,7 +41,7 @@ async function socrataQuery<T>(
       $offset: String(offset),
       ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
     })
-    const url = `${SOCRATA}/${dataset}.json?${qs.toString()}`
+    const url = `${host}/${dataset}.json?${qs.toString()}`
     const res = await fetch(url)
     if (!res.ok) throw new Error(`Socrata ${dataset} HTTP ${res.status}`)
     const batch = (await res.json()) as T[]
@@ -55,8 +57,12 @@ async function socrataQuery<T>(
 
 type SubwayStationRow = {
   gtfs_stop_id?: string
+  gtfs_stop_ids?: string  // 5f5g-n3cz uses plural (comma-sep for complexes)
   stop_id?: string
   stop_name?: string
+  display_name?: string
+  latitude?: string
+  longitude?: string
   name?: string
   gtfs_latitude?: string
   gtfs_longitude?: string
@@ -68,13 +74,20 @@ type SubwayStationRow = {
 
 async function seedSubwayStations() {
   const db = getDb()
-  const rows = await socrataQuery<SubwayStationRow>('i7jb-7jku', {})
+  // MTA Subway Stations live on data.ny.gov (NY State Open Data). Dataset
+  // 5f5g-n3cz ("MTA Subway Stations and Complexes") returns ~445 rows with
+  // gtfs_stop_ids (comma-sep for station complexes — take the first), stop_name,
+  // latitude, longitude, daytime_routes (space-sep line letters), borough.
+  // The earlier alternate 39hk-dx4f returns only 1 row in the public API
+  // (deprecated / stub) — do not use.
+  const rows = await socrataQuery<SubwayStationRow>('5f5g-n3cz', {}, 5_000, SOCRATA_NY)
   const records = rows
     .map((r) => {
-      const stop_id = r.gtfs_stop_id ?? r.stop_id
-      const name = r.stop_name ?? r.name
-      const lat = parseFloat(r.gtfs_latitude ?? r.stop_lat ?? '')
-      const lng = parseFloat(r.gtfs_longitude ?? r.stop_lon ?? '')
+      const stop_id =
+        r.gtfs_stop_ids?.split(',')[0]?.trim() ?? r.gtfs_stop_id ?? r.stop_id
+      const name = r.stop_name ?? r.display_name ?? r.name
+      const lat = parseFloat(r.latitude ?? r.gtfs_latitude ?? r.stop_lat ?? '')
+      const lng = parseFloat(r.longitude ?? r.gtfs_longitude ?? r.stop_lon ?? '')
       const linesStr = r.daytime_routes ?? r.routes ?? ''
       if (!stop_id || !name || !Number.isFinite(lat) || !Number.isFinite(lng)) return null
       return {
@@ -185,6 +198,14 @@ type RsbRow = {
 
 async function seedRentStabilized() {
   const db = getDb()
+  // The NYC HCR rent-stabilized building list is NOT publicly hosted as a clean
+  // dataset on data.cityofnewyork.us — `tdrx-mwj7` is stale (404). The community
+  // standard (used by Streeteasy/JustFix) is JustFix's `taxbills.nyc` archive,
+  // but it's not Socrata-shaped. For v0 we skip cleanly and HPD violations
+  // remain the primary public-data quality signal. Re-enable when a usable
+  // public dataset appears or when we add a JustFix-archive importer.
+  console.log('[seed] rent_stabilized: skipped (no current public dataset)')
+  return
   const rows = await socrataQuery<RsbRow>('tdrx-mwj7', {})
   const records = rows
     .map((r) => {

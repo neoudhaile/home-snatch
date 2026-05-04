@@ -6,6 +6,7 @@ import { ThemeToggle } from './theme-toggle'
 import { FreshnessSelector } from './freshness-selector'
 import { SourceFilter } from './source-filter'
 import { SearchInput } from './search-input'
+import { ScrapeButton } from './scrape-button'
 import type { Source } from '@/types'
 
 export type HeaderState = {
@@ -19,6 +20,7 @@ export function Header({
   savedCount = 0,
   showFilters = true,
   showSearch = true,
+  showScrape = true,
   initialQuery,
 }: {
   state: HeaderState
@@ -26,6 +28,12 @@ export function Header({
   savedCount?: number
   showFilters?: boolean
   showSearch?: boolean
+  /**
+   * Show the "Scrape now" / Refresh button next to the freshness selector.
+   * Default true; pass false on routes (/add, /setup) where a manual scrape
+   * is irrelevant or noisy.
+   */
+  showScrape?: boolean
   initialQuery?: string
 }) {
   return (
@@ -71,6 +79,7 @@ export function Header({
               value={state.sources}
               onChange={(sources) => onChange({ ...state, sources })}
             />
+            {showScrape ? <ScrapeButton /> : null}
           </div>
         ) : null}
 
@@ -129,6 +138,7 @@ export function Header({
             value={state.sources}
             onChange={(sources) => onChange({ ...state, sources })}
           />
+          {showScrape ? <ScrapeButton /> : null}
         </div>
       ) : null}
     </header>

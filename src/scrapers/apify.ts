@@ -15,9 +15,6 @@
  *   - `aggressive`  — up to 12 searches per actor: 4 boroughs + ≤3 bed-counts
  *                     + ≤5 preferred neighborhoods   (≈1.5 actor-hr / pass)
  *
- * On a personal $5/mo Apify plan (~100 actor-hours), an every-2-hour aggressive
- * sweep across 8 actors is roughly $15-25/mo — fine, but documented.
- *
  * Search variants are generated per-actor from `loadAllProfileFiles()`:
  *   1. Borough sweep — Manhattan / Brooklyn / Queens / Bronx
  *   2. Bed-count sweep — beds_min .. beds_max from joint constraints
@@ -28,25 +25,32 @@
  * defensive — actor outputs vary across forks; we tolerate missing fields and
  * fall through to null rather than fabricating.
  *
- * Actor choices (audit notes 2026-05-04):
+ * Actor choices (audit notes 2026-05-04 — switched to FREE-tier actors):
  *
- *   - Zillow      — `maxcopell~zillow-detail-scraper` (active <30d, full detail)
- *   - StreetEasy  — `epctex~streeteasy-scraper` (search+detail, accepts URLs)
- *   - Trulia      — `epctex~trulia-scraper` (same vendor pattern)
- *   - Apartments  — `epctex~apartments-scraper` (same vendor pattern)
- *   - Realtor     — `epctex~realtor-scraper` (vendor parity; alt:
- *                    `vnknfeoifrcb~realtor-rental-scraper`)
- *   - Redfin      — `epctex~redfin-scraper` (rentals included; alt:
- *                    `compass~redfin-scraper`)
- *   - HotPads     — `epctex~hotpads-scraper` (community fork; alt:
- *                    `apify~web-scraper` w/ HP CSS selectors as fallback)
- *   - RentHop     — `epctex~renthop-scraper` (NYC-focused)
- *   - Twitter/X   — `apidojo~twitter-scraper-lite` (free-tier-friendly; the
- *                    `apify~twitter-scraper` actor is paid). Filters to a
- *                    curated list of NYC listing accounts.
+ *   - Zillow      — `parseforge/zillow-rentals-scraper`
+ *                   Input:  { listingUrl, maxItems, proxyConfig }
+ *                   Schema: https://apify.com/parseforge/zillow-rentals-scraper/input-schema
+ *   - StreetEasy  — `shahidirfan/StreetEasy-Scraper`
+ *                   Input:  { start_url, listing_type, results_wanted, max_pages, proxyConfiguration }
+ *                   Schema: https://apify.com/shahidirfan/StreetEasy-Scraper/input-schema
+ *   - Apartments  — `sovereigntaylor/apartments-scraper`
+ *                   Input:  { locations[], minRent, maxRent, beds, baths, petFriendly, maxResults, proxyConfiguration }
+ *                   Schema: https://apify.com/sovereigntaylor/apartments-scraper/input-schema
+ *   - Realtor     — `sovereigntaylor/realtor-scraper`
+ *                   Input:  { locations[], propertyType, minPrice, maxPrice, minBeds, minBaths, status, maxResults, proxyConfiguration }
+ *                   Schema: https://apify.com/sovereigntaylor/realtor-scraper/input-schema
+ *   - Trulia      — `epctex~trulia-scraper` (paid; passthrough — no FREE actor)
+ *   - Redfin      — `epctex~redfin-scraper` (paid; passthrough — no FREE actor)
+ *   - HotPads     — `epctex~hotpads-scraper` (paid; passthrough — no FREE actor)
+ *   - RentHop     — `epctex~renthop-scraper` (paid; passthrough — no FREE actor)
+ *   - Twitter/X   — `apidojo~twitter-scraper-lite` (free-tier-friendly).
+ *                   Filters to a curated list of NYC listing accounts.
  *
- * If a particular actor doesn't match the user's chosen actor, override IDs
- * via env vars: APIFY_<SOURCE>_ACTOR.
+ * The four FREE actors above have DIFFERENT input shapes from each other
+ * (NOT the unified `startUrls` pattern of the epctex suite) — each actor's
+ * mapper writes the exact input shape its README documents. To override the
+ * actor used (e.g. swap to a paid alternative), set APIFY_<SOURCE>_ACTOR; if
+ * you do, you'll likely also need to adjust the input shape in this file.
  */
 
 import type { NewListing } from '@/types'
@@ -309,46 +313,56 @@ async function runVariantSweep<T>(opts: {
 }
 
 // =================================================================================
-// Zillow
+// Zillow — parseforge/zillow-rentals-scraper (FREE actor)
 // =================================================================================
+// Input schema (per https://apify.com/parseforge/zillow-rentals-scraper/input-schema):
+//   { listingUrl: string (REQUIRED), maxItems: int, proxyConfig: object }
+//   NOTE: ONE listingUrl per run — not the `startUrls[]` shape of epctex actors.
+// Output (38 fields documented):
+//   { url, zpid, address, city, state, zipCode, latitude, longitude,
+//     bedrooms, bathrooms, livingArea, propertyType, price, currency,
+//     homeStatus, daysOnZillow, rentZestimate, imageUrl, imageUrls[],
+//     brokerName, depositMin, depositMax, leaseTerms, availableFrom,
+//     buildingName, unitNumber, scrapedAt, description, parking, heating,
+//     cooling, appliances, petPolicy, laundry, ... }
 
-const ZILLOW_ACTOR = process.env.APIFY_ZILLOW_ACTOR ?? 'maxcopell~zillow-detail-scraper'
+const ZILLOW_ACTOR = process.env.APIFY_ZILLOW_ACTOR ?? 'parseforge~zillow-rentals-scraper'
 
 type ZillowItem = {
-  hdpUrl?: string
   url?: string
-  detailUrl?: string
-  address?: { streetAddress?: string; city?: string; state?: string; zipcode?: string } | string
-  streetAddress?: string
+  zpid?: number | string
+  address?: string
   city?: string
   state?: string
-  zipcode?: string
-  price?: number | string
-  rentZestimate?: number
+  zipCode?: string
+  latitude?: number
+  longitude?: number
   bedrooms?: number
   bathrooms?: number
   livingArea?: number
-  description?: string
-  hdpData?: unknown
-  photos?: unknown
-  images?: unknown
-  imgSrc?: string
-  brokerName?: string
-  agentName?: string
-  agentPhoneNumber?: string
-  agentEmail?: string
-  brokerageName?: string
+  propertyType?: string
+  price?: number | string
+  currency?: string
+  homeStatus?: string
   daysOnZillow?: number
-  datePosted?: string
-  latitude?: number
-  longitude?: number
-  zpid?: number | string
+  rentZestimate?: number
+  imageUrl?: string
+  imageUrls?: unknown
+  brokerName?: string
+  depositMin?: number
+  depositMax?: number
+  leaseTerms?: string
+  availableFrom?: string
+  buildingName?: string
+  unitNumber?: string
+  scrapedAt?: string
+  description?: string
+  petPolicy?: string
+  laundry?: string
 }
 
 function zillowSearchUrl(v: Variant): string {
   // Format: https://www.zillow.com/<area>-new-york-ny/rentals/<beds>-_beds/
-  // Zillow accepts area paths like "manhattan-new-york-ny", "brooklyn-new-york-ny",
-  // and neighborhood slugs like "williamsburg-new-york-ny" / "bushwick-new-york-ny".
   const base = 'https://www.zillow.com'
   let area = 'new-york-ny'
   if (v.borough) area = `${slugify(v.borough)}-new-york-ny`
@@ -360,94 +374,111 @@ function zillowSearchUrl(v: Variant): string {
 
 function mapZillow(item: ZillowItem, v: Variant): NewListing | null {
   const url =
-    item.hdpUrl ??
     item.url ??
-    item.detailUrl ??
     (item.zpid ? `https://www.zillow.com/homedetails/${item.zpid}_zpid/` : null)
   if (!url) return null
-  const addrObj = typeof item.address === 'object' ? item.address : null
-  const address =
-    addrObj?.streetAddress ??
-    item.streetAddress ??
-    (typeof item.address === 'string' ? item.address : null) ??
-    null
-  const city = addrObj?.city ?? item.city ?? null
-  const zip = addrObj?.zipcode ?? item.zipcode ?? null
-  const photos = asPhotoArray(item.photos) || asPhotoArray(item.images)
-  if (photos.length === 0 && item.imgSrc) photos.push(item.imgSrc)
+  const photos = asPhotoArray(item.imageUrls)
+  if (photos.length === 0 && item.imageUrl) photos.push(item.imageUrl)
+  const petFriendly =
+    typeof item.petPolicy === 'string'
+      ? /(allowed|cats|dogs|yes|ok|friendly)/i.test(item.petPolicy) &&
+        !/no\s+(pets|cats|dogs)/i.test(item.petPolicy)
+      : null
+  const unitTitle = [item.buildingName, item.unitNumber].filter(Boolean).join(' #')
 
   return {
     source: 'zillow',
     source_url: url,
-    title: address ? `${address}${city ? `, ${city}` : ''}` : 'Zillow listing',
+    title: unitTitle || item.address || 'Zillow listing',
     description: item.description ?? null,
     price_monthly: asNumber(item.price) ?? item.rentZestimate ?? null,
     beds: item.bedrooms != null ? item.bedrooms.toString() : null,
     baths: item.bathrooms != null ? item.bathrooms.toString() : null,
     sqft: item.livingArea ?? null,
+    available_date: asDate(item.availableFrom),
+    lease_term: item.leaseTerms ?? null,
+    pet_friendly: petFriendly,
     photos,
-    address,
-    borough: v.borough ?? city ?? null,
+    address: item.address ?? null,
+    unit: item.unitNumber ?? null,
+    borough: v.borough ?? item.city ?? null,
     neighborhood: v.neighborhood ?? null,
-    zip,
+    zip: item.zipCode ?? null,
     lat: item.latitude ?? null,
     lng: item.longitude ?? null,
     contact: {
-      name: item.agentName ?? item.brokerName,
-      agency: item.brokerageName,
-      phone: item.agentPhoneNumber,
-      email: item.agentEmail,
-      preferred_method: item.agentPhoneNumber ? 'phone' : item.agentEmail ? 'email' : undefined,
+      name: item.brokerName,
+      preferred_method: undefined,
     },
-    posted_at: asDate(item.datePosted),
+    posted_at:
+      typeof item.daysOnZillow === 'number'
+        ? new Date(Date.now() - item.daysOnZillow * 24 * 60 * 60 * 1000)
+        : asDate(item.scrapedAt),
     is_active: true,
     raw: { actor: ZILLOW_ACTOR, variant: v.label, item: item as unknown },
   }
 }
 
+/**
+ * Zillow's FREE actor takes ONE listingUrl per run, not startUrls[]. We can't
+ * use `runVariantSweep` (which assumes the epctex/startUrls shape), so we
+ * run each variant manually with the actor-specific input shape.
+ */
 export async function runZillowSearchNYC(): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
   const variants = await buildVariants()
-  return runVariantSweep<ZillowItem>({
-    actorId: ZILLOW_ACTOR,
-    variants,
-    urlFor: zillowSearchUrl,
-    extraInput: () => ({ extractionMethod: 'PAGINATION_WITH_ZOOM_IN' }),
-    mapItem: mapZillow,
-  })
+  const results: NewListing[] = []
+  let i = 0
+  while (i < variants.length) {
+    const slice = variants.slice(i, i + 2)
+    i += 2
+    const got = await Promise.all(
+      slice.map(async (v) => {
+        const url = zillowSearchUrl(v)
+        const items = await runApifyActor<ZillowItem>(ZILLOW_ACTOR, {
+          listingUrl: url,
+          maxItems: 100,
+          proxyConfig: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
+        })
+        return items
+          .map((it) => mapZillow(it, v))
+          .filter((l): l is NewListing => l != null)
+      }),
+    )
+    for (const arr of got) results.push(...arr)
+  }
+  return dedupeByUrl(results)
 }
 
 // =================================================================================
-// StreetEasy
+// StreetEasy — shahidirfan/StreetEasy-Scraper (FREE actor)
 // =================================================================================
+// Input schema (per https://apify.com/shahidirfan/StreetEasy-Scraper/input-schema):
+//   { start_url: string, listing_type: 'for-sale'|'for-rent', results_wanted: int,
+//     max_pages: int, proxyConfiguration: object }
+//   NOTE: snake_case keys. We always set listing_type='for-rent'.
+// Output (NYC-only fields, all string-typed):
+//   { url, price, address, neighborhood, beds, baths, sqft, property_type,
+//     broker, image_url }
+//   Caveat: this actor's output is thin (no agent contact/email/phone, no
+//   posted_at, no description). We map what's there; consumers downstream can
+//   re-fetch the URL via direct/Browserless to enrich if needed.
 
-const STREETEASY_ACTOR = process.env.APIFY_STREETEASY_ACTOR ?? 'epctex~streeteasy-scraper'
+const STREETEASY_ACTOR =
+  process.env.APIFY_STREETEASY_ACTOR ?? 'shahidirfan~StreetEasy-Scraper'
 
 type StreetEasyItem = {
   url?: string
-  detailUrl?: string
+  price?: string | number
   address?: string
-  title?: string
-  price?: number | string
-  bedrooms?: number
-  bathrooms?: number
-  squareFeet?: number
-  description?: string
-  photos?: unknown
-  images?: unknown
-  borough?: string
   neighborhood?: string
-  zip?: string
-  agentName?: string
-  agentPhone?: string
-  agentEmail?: string
-  brokerage?: string
-  noFee?: boolean
-  brokerFee?: string
-  amenities?: unknown
-  availableOn?: string
-  datePosted?: string
-  latitude?: number
-  longitude?: number
+  beds?: string | number
+  baths?: string | number
+  sqft?: string | number
+  property_type?: string
+  broker?: string
+  image_url?: string
 }
 
 function streetEasySearchUrl(v: Variant): string {
@@ -464,55 +495,70 @@ function streetEasySearchUrl(v: Variant): string {
 }
 
 function mapStreetEasy(item: StreetEasyItem, v: Variant): NewListing | null {
-  const url = item.url ?? item.detailUrl
-  if (!url) return null
-  const photos = asPhotoArray(item.photos) || asPhotoArray(item.images)
-  const amenities = Array.isArray(item.amenities)
-    ? (item.amenities.filter((a) => typeof a === 'string') as string[])
-    : []
+  if (!item.url) return null
+  const photos: string[] = []
+  if (item.image_url && /^https?:\/\//.test(item.image_url)) photos.push(item.image_url)
   return {
     source: 'streeteasy',
-    source_url: url,
-    title: item.title ?? item.address ?? 'StreetEasy listing',
-    description: item.description ?? null,
+    source_url: item.url,
+    title: item.address ?? item.property_type ?? 'StreetEasy listing',
+    description: null,
     price_monthly: asNumber(item.price),
-    beds: item.bedrooms != null ? item.bedrooms.toString() : null,
-    baths: item.bathrooms != null ? item.bathrooms.toString() : null,
-    sqft: item.squareFeet ?? null,
+    beds:
+      typeof item.beds === 'number'
+        ? item.beds.toString()
+        : asNumber(item.beds)?.toString() ?? null,
+    baths:
+      typeof item.baths === 'number'
+        ? item.baths.toString()
+        : asNumber(item.baths)?.toString() ?? null,
+    sqft: typeof item.sqft === 'number' ? item.sqft : asNumber(item.sqft),
     photos,
-    amenities,
     address: item.address ?? null,
     neighborhood: item.neighborhood ?? v.neighborhood ?? null,
-    borough: item.borough ?? v.borough ?? null,
-    zip: item.zip ?? null,
-    lat: item.latitude ?? null,
-    lng: item.longitude ?? null,
+    borough: v.borough ?? null,
     contact: {
-      name: item.agentName,
-      agency: item.brokerage,
-      phone: item.agentPhone,
-      email: item.agentEmail,
-      preferred_method: item.agentPhone ? 'phone' : item.agentEmail ? 'email' : undefined,
+      agency: item.broker,
+      preferred_method: undefined,
     },
-    application: {
-      broker_fee_pct: item.noFee ? 0 : undefined,
-      broker_fee_text: item.noFee ? 'no fee' : item.brokerFee,
-    },
-    available_date: asDate(item.availableOn),
-    posted_at: asDate(item.datePosted),
     is_active: true,
     raw: { actor: STREETEASY_ACTOR, variant: v.label, item: item as unknown },
   }
 }
 
+/**
+ * StreetEasy actor takes ONE start_url per run. We fan out per variant.
+ */
 export async function runStreeteasySearchNYC(): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
   const variants = await buildVariants()
-  return runVariantSweep<StreetEasyItem>({
-    actorId: STREETEASY_ACTOR,
-    variants,
-    urlFor: streetEasySearchUrl,
-    mapItem: mapStreetEasy,
-  })
+  const results: NewListing[] = []
+  let i = 0
+  while (i < variants.length) {
+    const slice = variants.slice(i, i + 2)
+    i += 2
+    const got = await Promise.all(
+      slice.map(async (v) => {
+        const url = streetEasySearchUrl(v)
+        const items = await runApifyActor<StreetEasyItem>(STREETEASY_ACTOR, {
+          start_url: url,
+          listing_type: 'for-rent',
+          results_wanted: 50,
+          max_pages: 5,
+          proxyConfiguration: {
+            useApifyProxy: true,
+            apifyProxyGroups: ['RESIDENTIAL'],
+          },
+        })
+        return items
+          .map((it) => mapStreetEasy(it, v))
+          .filter((l): l is NewListing => l != null)
+      }),
+    )
+    for (const arr of got) results.push(...arr)
+  }
+  return dedupeByUrl(results)
 }
 
 // =================================================================================
@@ -600,198 +646,306 @@ export async function runTruliaSearchNYC(): Promise<NewListing[]> {
 }
 
 // =================================================================================
-// Apartments.com
+// Apartments.com — sovereigntaylor/apartments-scraper (FREE actor)
 // =================================================================================
+// Input schema (per https://apify.com/sovereigntaylor/apartments-scraper/input-schema):
+//   { locations: string[] (REQUIRED — city names, neighborhoods, or full URLs),
+//     minRent: int, maxRent: int, beds: int (min beds), baths: int (min baths),
+//     petFriendly: bool, maxResults: int, proxyConfiguration: object }
+//   NOTE: locations is an array — we batch all variants into a single run when
+//   possible, since the actor handles multiple locations per call.
+// Output:
+//   { url, listingId, name, address, city, state, zipCode, neighborhood,
+//     rent (string), rentMin, rentMax, fees[], beds, baths, sqft, floorPlans[],
+//     amenities[], description, propertyType, yearBuilt, images[], parking,
+//     petPolicy, petFriendly, contact{phone, officeHours, managementCompany},
+//     latitude, longitude, walkScore, transitScore, rating, reviewCount,
+//     scrapedAt, ... }
 
-const APARTMENTS_ACTOR = process.env.APIFY_APARTMENTS_ACTOR ?? 'epctex~apartments-scraper'
+const APARTMENTS_ACTOR =
+  process.env.APIFY_APARTMENTS_ACTOR ?? 'sovereigntaylor~apartments-scraper'
 
 type ApartmentsItem = {
   url?: string
-  detailUrl?: string
-  propertyName?: string
-  title?: string
+  listingId?: string
+  name?: string
   address?: string
-  price?: number | string
-  rent?: { min?: number; max?: number }
-  bedrooms?: number | string
-  bathrooms?: number | string
-  squareFeet?: number
-  description?: string
-  photos?: unknown
-  images?: unknown
-  neighborhood?: string
   city?: string
   state?: string
-  zip?: string
-  phone?: string
-  managementCompany?: string
+  zipCode?: string
+  neighborhood?: string
+  rent?: string
+  rentMin?: number
+  rentMax?: number
+  fees?: Array<{ type?: string; amount?: number; description?: string }>
+  beds?: number | string
+  baths?: number | string
+  sqft?: number | string
+  floorPlans?: unknown
   amenities?: unknown
-  datePosted?: string
+  description?: string
+  propertyType?: string
+  images?: unknown
+  parking?: string
+  petPolicy?: string
+  petFriendly?: boolean
+  contact?: { phone?: string; officeHours?: string; managementCompany?: string }
   latitude?: number
   longitude?: number
+  walkScore?: number
+  transitScore?: number
+  scrapedAt?: string
 }
 
-function apartmentsSearchUrl(v: Variant): string {
-  // Apartments.com: https://www.apartments.com/<area>/<beds>-bedroom/?price=<max>
-  const base = 'https://www.apartments.com'
-  let area = 'new-york-ny'
-  if (v.borough) area = `${slugify(v.borough)}-ny`
-  if (v.neighborhood) area = `${slugify(v.neighborhood)}-new-york-ny`
-  let path = `/${area}/`
-  if (v.beds === 0) path += 'studio/'
-  else if (v.beds != null) path += `${v.beds}-bedrooms/`
-  if (v.budgetMax) path += `under-${v.budgetMax}/`
-  return `${base}${path}`
+function apartmentsLocation(v: Variant): string {
+  // Apartments.com accepts URL slugs as 'locations' entries.
+  // E.g. "new-york-ny", "brooklyn-ny", "williamsburg-new-york-ny"
+  if (v.neighborhood) return `${slugify(v.neighborhood)}-new-york-ny`
+  if (v.borough) return `${slugify(v.borough)}-ny`
+  return 'new-york-ny'
 }
 
 function mapApartments(item: ApartmentsItem, v: Variant): NewListing | null {
-  const url = item.url ?? item.detailUrl
-  if (!url) return null
+  if (!item.url) return null
+  // Pull application fee from `fees[]` if present.
+  const appFee = Array.isArray(item.fees)
+    ? (() => {
+        const f = item.fees!.find(
+          (x) => typeof x?.type === 'string' && /application/i.test(x.type),
+        )
+        return typeof f?.amount === 'number' ? f.amount : undefined
+      })()
+    : undefined
+
   const price =
-    asNumber(item.price) ?? (typeof item.rent?.min === 'number' ? item.rent.min : null)
-  const beds = item.bedrooms != null ? item.bedrooms.toString() : null
-  const baths = item.bathrooms != null ? item.bathrooms.toString() : null
+    typeof item.rentMin === 'number'
+      ? item.rentMin
+      : typeof item.rentMax === 'number'
+        ? item.rentMax
+        : asNumber(item.rent)
+
   const amenities = Array.isArray(item.amenities)
     ? (item.amenities.filter((a) => typeof a === 'string') as string[])
     : []
+
   return {
     source: 'apartments',
-    source_url: url,
-    title: item.propertyName ?? item.title ?? item.address ?? 'Apartments.com listing',
+    source_url: item.url,
+    title: item.name ?? item.address ?? 'Apartments.com listing',
     description: item.description ?? null,
     price_monthly: price,
-    beds,
-    baths,
-    sqft: item.squareFeet ?? null,
-    photos: asPhotoArray(item.photos) || asPhotoArray(item.images),
+    beds:
+      typeof item.beds === 'number'
+        ? item.beds.toString()
+        : asNumber(item.beds)?.toString() ?? null,
+    baths:
+      typeof item.baths === 'number'
+        ? item.baths.toString()
+        : asNumber(item.baths)?.toString() ?? null,
+    sqft: typeof item.sqft === 'number' ? item.sqft : asNumber(item.sqft),
+    pet_friendly:
+      typeof item.petFriendly === 'boolean'
+        ? item.petFriendly
+        : item.petPolicy
+          ? /(allowed|yes|ok|cats|dogs)/i.test(item.petPolicy) &&
+            !/no\s+(pets|cats|dogs)/i.test(item.petPolicy)
+          : null,
     amenities,
+    photos: asPhotoArray(item.images),
     address: item.address ?? null,
     neighborhood: item.neighborhood ?? v.neighborhood ?? null,
-    borough: item.city ?? v.borough ?? null,
-    zip: item.zip ?? null,
+    borough: v.borough ?? item.city ?? null,
+    zip: item.zipCode ?? null,
     lat: item.latitude ?? null,
     lng: item.longitude ?? null,
     contact: {
-      name: item.managementCompany,
-      phone: item.phone,
-      preferred_method: item.phone ? 'phone' : undefined,
+      name: item.contact?.managementCompany,
+      phone: item.contact?.phone,
+      preferred_method: item.contact?.phone ? 'phone' : undefined,
     },
-    posted_at: asDate(item.datePosted),
+    application: {
+      fee: appFee,
+    },
+    posted_at: asDate(item.scrapedAt),
     is_active: true,
     raw: { actor: APARTMENTS_ACTOR, variant: v.label, item: item as unknown },
   }
 }
 
+/**
+ * Apartments.com FREE actor accepts an array of locations in ONE run. We batch
+ * all variants into a single run for efficiency (one Apify charge per
+ * sweep, not N).
+ */
 export async function runApartmentsSearchNYC(): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
   const variants = await buildVariants()
-  return runVariantSweep<ApartmentsItem>({
-    actorId: APARTMENTS_ACTOR,
-    variants,
-    urlFor: apartmentsSearchUrl,
-    mapItem: mapApartments,
+  if (variants.length === 0) return []
+
+  // Pull joint budget cap from the first variant that has one (all variants
+  // in a sweep share the same budgetMax; see buildVariants).
+  const budgetMax = variants.find((v) => v.budgetMax != null)?.budgetMax ?? null
+  // For beds, only filter at actor-level if ALL variants agree on a single
+  // beds count. Otherwise leave it at 0 (any) and post-filter in JS via the
+  // normal feed pipeline.
+  const bedsSet = new Set(variants.map((v) => v.beds).filter((b) => b != null) as number[])
+  const beds = bedsSet.size === 1 ? [...bedsSet][0] : 0
+
+  const locations = Array.from(new Set(variants.map(apartmentsLocation)))
+  const items = await runApifyActor<ApartmentsItem>(APARTMENTS_ACTOR, {
+    locations,
+    minRent: 0,
+    maxRent: budgetMax ?? 0,
+    beds,
+    baths: 0,
+    petFriendly: false,
+    maxResults: Math.min(200, locations.length * 50),
+    proxyConfiguration: { useApifyProxy: true },
   })
+
+  // The actor returns items without telling us which location-variant each
+  // belongs to, so we annotate with a synthesized "all" variant.
+  const allVariant: Variant = { label: `apartments:batch(${locations.length})` }
+  return dedupeByUrl(
+    items.map((it) => mapApartments(it, allVariant)).filter((l): l is NewListing => l != null),
+  )
 }
 
 // =================================================================================
-// Realtor.com
+// Realtor.com — sovereigntaylor/realtor-scraper (FREE actor)
 // =================================================================================
-// Why this actor: epctex maintains a parallel suite (StreetEasy, Trulia, etc.)
-// with a consistent input shape (`startUrls` + `maxItems`). It's <90d-fresh
-// per the Apify store. Alt: `vnknfeoifrcb~realtor-rental-scraper` if you want
-// a rental-specialized fork — same input shape, override via APIFY_REALTOR_ACTOR.
-// Expected output volume: 50-300/sweep.
+// Input schema (per https://apify.com/sovereigntaylor/realtor-scraper/input-schema):
+//   { locations: string[] (REQUIRED — "City-Name_ST" format like "New-York_NY"
+//     or ZIP codes), propertyType: 'any'|'single_family'|'multi_family'|
+//     'condo'|'townhouse'|'mobile'|'land'|'farm', minPrice: int, maxPrice: int,
+//     minBeds: int, minBaths: int, status: 'for_sale'|'for_rent'|'recently_sold'|
+//     'pending', maxResults: int (per location), proxyConfiguration: object }
+//   NOTE: status='for_rent' is essential for our use case.
+// Output:
+//   { url, propertyId, address, streetAddress, city, state, zipcode, price,
+//     priceFormatted, beds, baths, bathsFull, bathsHalf, sqft, lotSize,
+//     yearBuilt, propertyType, status, daysOnMarket, listDate, agent,
+//     agentPhone, brokerage, mlsId, primaryImage, images[], latitude,
+//     longitude, scrapedAt, ... and detail-page extras: description,
+//     neighborhood{walkScore,transitScore,bikeScore}, schools, features }
 
-const REALTOR_ACTOR = process.env.APIFY_REALTOR_ACTOR ?? 'epctex~realtor-scraper'
+const REALTOR_ACTOR = process.env.APIFY_REALTOR_ACTOR ?? 'sovereigntaylor~realtor-scraper'
 
 type RealtorItem = {
   url?: string
-  detailUrl?: string
-  permalink?: string
-  property_id?: string | number
-  address?: { line?: string; city?: string; state_code?: string; postal_code?: string } | string
-  list_price?: number
+  propertyId?: string
+  address?: string
+  streetAddress?: string
+  city?: string
+  state?: string
+  zipcode?: string
   price?: number | string
+  priceFormatted?: string
   beds?: number
   baths?: number
+  bathsFull?: number
+  bathsHalf?: number
   sqft?: number
-  description?: { text?: string } | string
-  photos?: unknown
+  yearBuilt?: number
+  propertyType?: string
+  status?: string
+  daysOnMarket?: number
+  listDate?: string
+  agent?: string
+  agentPhone?: string
+  brokerage?: string
+  mlsId?: string
+  primaryImage?: string
   images?: unknown
-  primary_photo?: { href?: string }
-  agent?: { name?: string; phone?: string; email?: string; office?: string }
-  list_date?: string
   latitude?: number
   longitude?: number
+  scrapedAt?: string
+  description?: string
+  neighborhood?:
+    | string
+    | { name?: string; walkScore?: number; transitScore?: number; bikeScore?: number }
 }
 
-function realtorSearchUrl(v: Variant): string {
-  // Realtor.com: https://www.realtor.com/apartments/<City>_NY/  ; with filters
-  // via path segments (?baths-1+) or `?price=...`. We use simple area paths.
-  const base = 'https://www.realtor.com/apartments'
-  let area = 'New-York_NY'
-  if (v.borough) area = `${v.borough.replace(/\s+/g, '-')}_NY`
-  // Bed-count filter: realtor uses `/beds-N/` segment
-  let path = `/${area}/`
-  if (v.beds != null) path += `beds-${v.beds}/`
-  if (v.budgetMax) path += `price-na-${v.budgetMax}/`
-  return `${base}${path}`
+function realtorLocation(v: Variant): string {
+  // Realtor wants "City-Name_ST" with hyphens.
+  if (v.borough) return `${v.borough.replace(/\s+/g, '-')}_NY`
+  return 'New-York_NY'
 }
 
 function mapRealtor(item: RealtorItem, v: Variant): NewListing | null {
-  const url =
-    item.url ??
-    item.detailUrl ??
-    item.permalink ??
-    (item.property_id ? `https://www.realtor.com/realestateandhomes-detail/M${item.property_id}` : null)
-  if (!url) return null
-  const addrObj = typeof item.address === 'object' ? item.address : null
-  const address =
-    addrObj?.line ??
-    (typeof item.address === 'string' ? item.address : null) ??
-    null
-  const city = addrObj?.city ?? null
-  const zip = addrObj?.postal_code ?? null
-  const desc = typeof item.description === 'object' ? item.description?.text : item.description
-  const photos = asPhotoArray(item.photos) || asPhotoArray(item.images)
-  if (photos.length === 0 && item.primary_photo?.href) photos.push(item.primary_photo.href)
+  if (!item.url) return null
+  const photos = asPhotoArray(item.images)
+  if (photos.length === 0 && item.primaryImage) photos.push(item.primaryImage)
+  const nbhd =
+    typeof item.neighborhood === 'string'
+      ? item.neighborhood
+      : item.neighborhood?.name ?? null
+  const address = item.streetAddress ?? item.address ?? null
 
   return {
     source: 'realtor',
-    source_url: url,
-    title: address ? `${address}${city ? `, ${city}` : ''}` : 'Realtor.com listing',
-    description: desc ?? null,
-    price_monthly: asNumber(item.price) ?? item.list_price ?? null,
+    source_url: item.url,
+    title: address ?? 'Realtor.com listing',
+    description: item.description ?? null,
+    price_monthly: asNumber(item.price) ?? asNumber(item.priceFormatted),
     beds: item.beds != null ? item.beds.toString() : null,
     baths: item.baths != null ? item.baths.toString() : null,
     sqft: item.sqft ?? null,
     photos,
     address,
-    neighborhood: v.neighborhood ?? null,
-    borough: v.borough ?? city ?? null,
-    zip,
+    neighborhood: nbhd ?? v.neighborhood ?? null,
+    borough: v.borough ?? item.city ?? null,
+    zip: item.zipcode ?? null,
     lat: item.latitude ?? null,
     lng: item.longitude ?? null,
     contact: {
-      name: item.agent?.name,
-      agency: item.agent?.office,
-      phone: item.agent?.phone,
-      email: item.agent?.email,
-      preferred_method: item.agent?.phone ? 'phone' : item.agent?.email ? 'email' : undefined,
+      name: item.agent,
+      agency: item.brokerage,
+      phone: item.agentPhone,
+      preferred_method: item.agentPhone ? 'phone' : undefined,
     },
-    posted_at: asDate(item.list_date),
+    posted_at:
+      asDate(item.listDate) ??
+      (typeof item.daysOnMarket === 'number'
+        ? new Date(Date.now() - item.daysOnMarket * 24 * 60 * 60 * 1000)
+        : asDate(item.scrapedAt)),
     is_active: true,
     raw: { actor: REALTOR_ACTOR, variant: v.label, item: item as unknown },
   }
 }
 
+/**
+ * Realtor.com FREE actor accepts an array of locations in ONE run. Same
+ * batching strategy as Apartments.com.
+ */
 export async function runRealtorSearchNYC(): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
   const variants = await buildVariants()
-  return runVariantSweep<RealtorItem>({
-    actorId: REALTOR_ACTOR,
-    variants,
-    urlFor: realtorSearchUrl,
-    mapItem: mapRealtor,
+  if (variants.length === 0) return []
+
+  const budgetMax = variants.find((v) => v.budgetMax != null)?.budgetMax ?? null
+  const bedsSet = new Set(variants.map((v) => v.beds).filter((b) => b != null) as number[])
+  const minBeds = bedsSet.size === 1 ? [...bedsSet][0] : 0
+
+  const locations = Array.from(new Set(variants.map(realtorLocation)))
+  const items = await runApifyActor<RealtorItem>(REALTOR_ACTOR, {
+    locations,
+    propertyType: 'any',
+    minPrice: 0,
+    maxPrice: budgetMax ?? 0,
+    minBeds,
+    minBaths: 0,
+    status: 'for_rent',
+    maxResults: Math.min(500, locations.length * 100),
+    proxyConfiguration: { useApifyProxy: true },
   })
+
+  const allVariant: Variant = { label: `realtor:batch(${locations.length})` }
+  return dedupeByUrl(
+    items.map((it) => mapRealtor(it, allVariant)).filter((l): l is NewListing => l != null),
+  )
 }
 
 // =================================================================================
