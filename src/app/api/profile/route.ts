@@ -106,11 +106,24 @@ export async function GET() {
   return Response.json({ profiles: out }, { status: 200 })
 }
 
+// The setup wizard posts `{ who, profiles: [...] }` (array). API consumers may
+// post a single profile object. Accept both shapes.
+const wizardBodySchema = z.object({
+  who: z.union([z.number(), z.literal('all'), z.null()]).optional(),
+  profiles: z.array(profileBodySchema).min(1),
+})
+
 export async function POST(req: Request) {
-  let body: ProfileBody
+  let bodies: ProfileBody[]
   try {
     const raw = (await req.json()) as unknown
-    body = profileBodySchema.parse(raw)
+    const wizard = wizardBodySchema.safeParse(raw)
+    if (wizard.success) {
+      bodies = wizard.data.profiles
+    } else {
+      const single = profileBodySchema.parse(raw)
+      bodies = [single]
+    }
   } catch (err) {
     return Response.json(
       { error: 'bad_request', message: err instanceof Error ? err.message : 'invalid body' },
@@ -120,30 +133,37 @@ export async function POST(req: Request) {
 
   try {
     const db = getDb()
-    const insert = bodyToInsert(body)
-    const [row] = await db
-      .insert(profiles)
-      .values(insert)
-      .onConflictDoUpdate({
-        target: profiles.slug,
-        set: {
-          name: sql`excluded.name`,
-          budget_min: sql`excluded.budget_min`,
-          budget_max: sql`excluded.budget_max`,
-          beds_min: sql`excluded.beds_min`,
-          beds_max: sql`excluded.beds_max`,
-          must_have: sql`excluded.must_have`,
-          nice_to_have: sql`excluded.nice_to_have`,
-          deal_breakers: sql`excluded.deal_breakers`,
-          vibes: sql`excluded.vibes`,
-          commute: sql`excluded.commute`,
-          preferred_areas: sql`excluded.preferred_areas`,
-          notes: sql`excluded.notes`,
-          raw_jsonb: sql`excluded.raw_jsonb`,
-        },
-      })
-      .returning()
-    return Response.json({ profile: row }, { status: 200 })
+    const saved: unknown[] = []
+    for (const body of bodies) {
+      const insert = bodyToInsert(body)
+      const [row] = await db
+        .insert(profiles)
+        .values(insert)
+        .onConflictDoUpdate({
+          target: profiles.slug,
+          set: {
+            name: sql`excluded.name`,
+            budget_min: sql`excluded.budget_min`,
+            budget_max: sql`excluded.budget_max`,
+            beds_min: sql`excluded.beds_min`,
+            beds_max: sql`excluded.beds_max`,
+            must_have: sql`excluded.must_have`,
+            nice_to_have: sql`excluded.nice_to_have`,
+            deal_breakers: sql`excluded.deal_breakers`,
+            vibes: sql`excluded.vibes`,
+            commute: sql`excluded.commute`,
+            preferred_areas: sql`excluded.preferred_areas`,
+            notes: sql`excluded.notes`,
+            raw_jsonb: sql`excluded.raw_jsonb`,
+          },
+        })
+        .returning()
+      saved.push(row)
+    }
+    return Response.json(
+      bodies.length === 1 ? { profile: saved[0] } : { profiles: saved },
+      { status: 200 }
+    )
   } catch (err) {
     console.error('[api/profile] POST failed', err)
     return Response.json(
