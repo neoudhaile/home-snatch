@@ -38,7 +38,7 @@ import type { RankedListing } from '@/types'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 300
 
 /* ---------------------------- request schema ---------------------------- */
 

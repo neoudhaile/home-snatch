@@ -21,7 +21,7 @@ import {
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 300
 
 function authorized(req: Request): boolean {
   const expected = process.env.ADMIN_PASS
