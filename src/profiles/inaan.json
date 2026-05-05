@@ -10,13 +10,13 @@
   "nice_to_have": ["dishwasher", "no-broker-fee", "rent-stabilized", "roof-access"],
   "deal_breakers": ["ground-floor", "shared-bathroom", "5-or-more-flight-walk-up"],
   "vibes": {
-    "quiet": 7,
-    "walkable": 8,
-    "trendy": 5,
+    "quiet": 5,
+    "walkable": 9,
+    "trendy": 7,
     "cafes": 8,
-    "nightlife": 4,
-    "greenness": 6,
-    "family_friendly": 3
+    "nightlife": 8,
+    "greenness": 5,
+    "family_friendly": 2
   },
   "commute": [
     {
@@ -34,5 +34,5 @@
     "West Village",
     "East Village"
   ],
-  "notes": "Quiet engineer who works late, cooks home most nights, walks to coffee on weekends. Wants a real bedroom (not a divider) and natural light over square footage."
+  "notes": "Engineer who works late, cooks home most nights, walks to coffee on weekends, but loves nightlife and wants to be where things happen. Cool downtown areas (NoHo / SoHo / Nolita / W & E Village). Wants a real bedroom (not a divider) and natural light over square footage."
 }
