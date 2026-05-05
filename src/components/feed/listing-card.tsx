@@ -140,7 +140,7 @@ function FeaturedCard({
         )}
         <div className="photo-overlay pointer-events-none absolute inset-0" />
         <div className="absolute right-4 top-4 flex items-center gap-2">
-          {defaultSaver ? (
+          {defaultSaver && listing.score?.profile_set_hash !== 'mock' ? (
             <SaveButton
               listing_id={listing.id}
               saved_by={defaultSaver}
@@ -214,7 +214,7 @@ function WideCard({
           <PhotoMissing />
         )}
         <div className="absolute right-2 top-2 flex items-center gap-1.5">
-          {defaultSaver ? (
+          {defaultSaver && listing.score?.profile_set_hash !== 'mock' ? (
             <SaveButton
               listing_id={listing.id}
               saved_by={defaultSaver}
@@ -281,7 +281,7 @@ function CompactCard({
           <PhotoMissing />
         )}
         <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5">
-          {defaultSaver ? (
+          {defaultSaver && listing.score?.profile_set_hash !== 'mock' ? (
             <SaveButton
               listing_id={listing.id}
               saved_by={defaultSaver}

@@ -472,53 +472,82 @@ export async function getRankedFeedWithCounts(
   }
 
   // Run the listings join AND the per-neighborhood count aggregate in
-  // parallel. The count aggregate ignores the neighborhoods filter so the
-  // chip row reflects total inventory, not "in your selection".
+  // parallel. The count aggregate is COMPLETELY INDEPENDENT of the score-join
+  // — it counts ACTIVE LISTINGS (raw `listings` table) by neighborhood,
+  // regardless of whether each row has a current-hash score. This is the
+  // contract the chip row depends on: counts must reflect inventory, not
+  // "what survived the score-join + extended filters". Without this, a
+  // hash-set rotation (e.g. `hashProfileSet` change after a deploy) would
+  // briefly take all chip counts to 0 while the rescore is in flight.
+  //
+  // Error handling is split: a feed-query failure still ships the counts so
+  // the chip row stays accurate even when the score-join blows up.
   type CountRow = { neighborhood: string | null; n: number }
+
+  // FIX 2: the LATERAL subquery picks the LATEST score per listing ordered
+  // ONLY by `computed_at DESC` — no `profile_set_hash` equality filter. After
+  // a `hashProfileSet` rotation, every existing score row has a stale hash,
+  // but listings still surface using the most-recent stale score. The card
+  // already renders a `RescoringWrap` shimmer for stale hashes, so the UX is
+  // honest. Background `chainRescoreAfter` (queued from `app/page.tsx` via
+  // `after()`) converges the scores within a render or two.
+  const feedPromise = db.execute(sql`
+    SELECT l.*,
+           s.listing_id        AS s_listing_id,
+           s.profile_set_hash  AS s_profile_set_hash,
+           s.score             AS s_score,
+           s.headline          AS s_headline,
+           s.concerns          AS s_concerns,
+           s.rationale_jsonb   AS s_rationale_jsonb,
+           s.computed_at       AS s_computed_at
+    FROM listings l
+    LEFT JOIN LATERAL (
+      SELECT listing_id, profile_set_hash, score, headline, concerns,
+             rationale_jsonb, computed_at
+      FROM scores
+      WHERE listing_id = l.id
+      ORDER BY computed_at DESC
+      LIMIT 1
+    ) s ON true
+    WHERE l.is_active = true
+      AND l.posted_at >= ${cutoff}
+      ${sourceFilter}
+      ${neighborhoodFilter}
+    ORDER BY l.posted_at DESC
+    LIMIT ${limit * 4}
+  `) as unknown as Promise<JoinedRow[]>
+
+  // FIX 1: chip counts come from a SEPARATE COUNT query over the raw
+  // `listings` table — no join to `scores`, no score-hash dependency, no
+  // neighborhoods filter. Counts what's ACTUALLY in inventory per area.
+  const countPromise = db.execute(sql`
+    SELECT l.neighborhood AS neighborhood, count(*)::int AS n
+    FROM listings l
+    WHERE l.is_active = true
+      AND l.posted_at >= ${cutoff}
+      ${sourceFilter}
+    GROUP BY l.neighborhood
+  `) as unknown as Promise<CountRow[]>
+
+  // Settle independently so a feed-query failure doesn't kill the chip row,
+  // and a count-query failure doesn't kill the feed.
+  const [feedSettled, countSettled] = await Promise.allSettled([feedPromise, countPromise])
 
   let joined: JoinedRow[] = []
   let countRows: CountRow[] = []
-  try {
-    const [j, c] = await Promise.all([
-      db.execute(sql`
-        SELECT l.*,
-               s.listing_id        AS s_listing_id,
-               s.profile_set_hash  AS s_profile_set_hash,
-               s.score             AS s_score,
-               s.headline          AS s_headline,
-               s.concerns          AS s_concerns,
-               s.rationale_jsonb   AS s_rationale_jsonb,
-               s.computed_at       AS s_computed_at
-        FROM listings l
-        LEFT JOIN LATERAL (
-          SELECT listing_id, profile_set_hash, score, headline, concerns,
-                 rationale_jsonb, computed_at
-          FROM scores
-          WHERE listing_id = l.id
-          ORDER BY computed_at DESC
-          LIMIT 1
-        ) s ON true
-        WHERE l.is_active = true
-          AND l.posted_at >= ${cutoff}
-          ${sourceFilter}
-          ${neighborhoodFilter}
-        ORDER BY l.posted_at DESC
-        LIMIT ${limit * 4}
-      `) as unknown as Promise<JoinedRow[]>,
-      db.execute(sql`
-        SELECT l.neighborhood AS neighborhood, count(*)::int AS n
-        FROM listings l
-        WHERE l.is_active = true
-          AND l.posted_at >= ${cutoff}
-          ${sourceFilter}
-        GROUP BY l.neighborhood
-      `) as unknown as Promise<CountRow[]>,
-    ])
-    joined = j
-    countRows = c
-  } catch (err) {
-    console.warn(`[listing-helpers] joined feed query failed: ${(err as Error).message}`)
-    return { listings: [], neighborhood_counts: {} }
+  if (feedSettled.status === 'fulfilled') {
+    joined = feedSettled.value
+  } else {
+    console.warn(
+      `[listing-helpers] joined feed query failed: ${(feedSettled.reason as Error)?.message}`,
+    )
+  }
+  if (countSettled.status === 'fulfilled') {
+    countRows = countSettled.value
+  } else {
+    console.warn(
+      `[listing-helpers] neighborhood count query failed: ${(countSettled.reason as Error)?.message}`,
+    )
   }
 
   // Roll up counts by canonical name so "Bedford-Stuyvesant" and "Bed-Stuy"

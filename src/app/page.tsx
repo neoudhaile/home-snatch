@@ -1,3 +1,5 @@
+import { after } from 'next/server'
+import { revalidateTag } from 'next/cache'
 import { getRankedFeedWithCounts, type FeedFilters } from '@/lib/feed-data'
 import { FeedShell } from '@/components/feed/feed-shell'
 import {
@@ -12,6 +14,7 @@ import {
   loadAllProfileFiles,
   mergeProfileConstraints,
 } from '@/lib/profile-set'
+import { chainRescoreAfter } from '@/lib/rescore-helper'
 import { getSaveStateForListings, getTotalSavedCount } from '@/lib/save-state'
 import type { RankedListing } from '@/types'
 
@@ -27,6 +30,66 @@ type SearchParams = Promise<{
 }>
 
 export const dynamic = 'force-dynamic'
+
+// ---------- auto-rescore on stale-hash detection (Fix 3) ----------
+//
+// When the feed renders against an out-of-date `profile_set_hash` (e.g. after
+// a `hashProfileSet` change ships in a deploy, or the user edits a profile),
+// queue ONE background rescore via `after()` so the next render lands fresh
+// scores. The card UI already renders a stale shimmer for these listings, so
+// the user just sees converging scores instead of an empty feed.
+//
+// Dedup guard: an in-memory Map keyed by the current hash with a 5-minute
+// TTL prevents 100 parallel rescores when the feed is hot during a stale
+// window. Process-local (resets on cold start) — that's intentional, since a
+// cold start = new deploy = fresh hash anyway.
+
+const RESCORE_DEDUP_TTL_MS = 5 * 60 * 1000
+const rescoreInFlight = new Map<string, number>()
+
+function shouldQueueRescore(hash: string): boolean {
+  if (!hash) return false
+  const now = Date.now()
+  // Sweep stale entries opportunistically so the map doesn't grow unbounded.
+  for (const [k, ts] of rescoreInFlight) {
+    if (now - ts > RESCORE_DEDUP_TTL_MS) rescoreInFlight.delete(k)
+  }
+  const last = rescoreInFlight.get(hash)
+  if (last && now - last < RESCORE_DEDUP_TTL_MS) return false
+  rescoreInFlight.set(hash, now)
+  return true
+}
+
+function detectStale(listings: RankedListing[], currentHash: string): boolean {
+  if (!currentHash) return false
+  for (const l of listings) {
+    const h = l.score?.profile_set_hash ?? ''
+    if (h && h !== 'mock' && h !== currentHash) return true
+  }
+  return false
+}
+
+function maybeQueueAutoRescore(
+  listings: RankedListing[],
+  currentHash: string,
+): void {
+  if (!detectStale(listings, currentHash)) return
+  if (!shouldQueueRescore(currentHash)) return
+  // Don't await — ship the response now; rescore lands for the next render.
+  after(async () => {
+    try {
+      await chainRescoreAfter(null) // null = rescore the full active set
+      // Bust the feed cache so the next render picks up the fresh scores.
+      try {
+        revalidateTag('feed', 'max')
+      } catch {
+        /* outside request scope in some edge paths — ignore */
+      }
+    } catch (err) {
+      console.warn('[page] auto-rescore failed', err)
+    }
+  })
+}
 
 const DROP_KEYS: ReadonlyArray<FilterChipKey> = [
   'price',
@@ -132,6 +195,7 @@ export default async function HomePage({
       freshnessDays: 30,
       neighborhoods: effectiveNeighborhoods,
     })
+    maybeQueueAutoRescore(listings, currentProfileHash)
     const latestSeen = pickLatestSeen(listings)
     const initialSavedIds = await savedIdsFor(listings)
     return (
@@ -184,6 +248,7 @@ export default async function HomePage({
       // Search is an explicit "show me X" gesture, not a passive feed.
       neighborhoods: explicitNbhds.length > 0 ? explicitNbhds : undefined,
     })
+    maybeQueueAutoRescore(listings, currentProfileHash)
     const latestSeen = pickLatestSeen(listings)
     const initialSavedIds = await savedIdsFor(listings)
     return (
@@ -214,6 +279,7 @@ export default async function HomePage({
   }
   const filters = extendFeedFilters(base, effective)
   const { listings, neighborhood_counts } = await getRankedFeedWithCounts(filters)
+  maybeQueueAutoRescore(listings, currentProfileHash)
   const latestSeen = pickLatestSeen(listings)
   const initialSavedIds = await savedIdsFor(listings)
 
