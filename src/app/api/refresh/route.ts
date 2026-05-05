@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 // Direct scrapers fan out across many CL boroughs + 17 subreddits — give
 // ourselves a 60s ceiling matching Vercel Hobby.
-export const maxDuration = 60
+export const maxDuration = 300
 
 type SourceFn = () => Promise<NewListing[]>
 
