@@ -734,8 +734,25 @@ function toAnthropicMessages(msgs: IncomingMessage[]): Anthropic.MessageParam[] 
     if (typeof m.content === 'string') {
       return { role: m.role, content: m.content }
     }
-    // Already structured: pass through as-is. Types align with the SDK.
-    return { role: m.role, content: m.content as unknown as Anthropic.ContentBlockParam[] }
+    // Sanitize: chat-shell bakes tool_result blocks into PERSISTED assistant
+    // messages for chip-rail durability, but Anthropic's API requires
+    // tool_result blocks live ONLY in user messages. Strip them when
+    // forwarding to the API (they remain in localStorage for client
+    // rendering). Same for tool_use in user messages — only assistant emits
+    // tool_use.
+    const blocks = m.content as Array<{ type: string; [k: string]: unknown }>
+    const filtered = blocks.filter((b) => {
+      if (m.role === 'assistant') return b.type !== 'tool_result'
+      if (m.role === 'user') return b.type !== 'tool_use'
+      return true
+    })
+    // Empty content after sanitize would be rejected too. Replace with a
+    // single empty-text placeholder when that happens (rare).
+    const safe =
+      filtered.length > 0
+        ? filtered
+        : [{ type: 'text' as const, text: '' }]
+    return { role: m.role, content: safe as unknown as Anthropic.ContentBlockParam[] }
   })
 }
 
