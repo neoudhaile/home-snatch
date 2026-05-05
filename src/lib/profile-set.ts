@@ -281,9 +281,16 @@ async function _loadFromFiles(profilesDir: string): Promise<ProfileFile[]> {
 export async function loadAllProfileFiles(
   profilesDir = join(process.cwd(), 'src', 'profiles')
 ): Promise<ProfileFile[]> {
-  const fromDb = await loadFromDb()
-  if (fromDb && fromDb.length > 0) return fromDb
-  return _loadFromFiles(profilesDir)
+  // Merge DB rows with file profiles. DB takes precedence on slug clash so the
+  // wizard's saves win, but file-only slugs (e.g. seeds the user hasn't
+  // explicitly saved via UI yet) are still surfaced — otherwise saving Inaan
+  // via the wizard would silently hide Makonnen from the joint set.
+  const fromDb = (await loadFromDb()) ?? []
+  const fromFiles = await _loadFromFiles(profilesDir)
+  if (fromDb.length === 0) return fromFiles
+  const dbSlugs = new Set(fromDb.map((p) => p.slug))
+  const merged = [...fromDb, ...fromFiles.filter((p) => !dbSlugs.has(p.slug))]
+  return merged.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
 /**
