@@ -1071,31 +1071,53 @@ function applyExtendedFilters(rows: RankedListing[], opts: FeedFilters): RankedL
 }
 
 /**
- * Cached real-feed fetch. Keyed on (freshnessDays, sources) since those are
- * the only inputs that affect the underlying SQL. Extended filters (keywords,
- * priceMin, etc.) are applied in JS after this returns, so the same cached
- * payload backs every search variant within the TTL.
+ * Cached real-feed fetch. Keyed on (freshnessDays, sources, neighborhoods)
+ * since those are the inputs that affect the underlying SQL. Extended filters
+ * (keywords, priceMin, etc.) are applied in JS after this returns, so the
+ * same cached payload backs every search variant within the TTL.
  *
  * Tag: `feed`. Invalidate via `revalidateTag('feed')` after a scrape/refresh
  * upsert so the dashboard reflects fresh listings without waiting for the
  * 60-second TTL.
  */
 const _cachedRealFeed = unstable_cache(
-  async (freshnessDays: number | undefined, sources: Source[] | undefined) => {
+  async (
+    freshnessDays: number | undefined,
+    sources: Source[] | undefined,
+    neighborhoods: string[] | undefined,
+  ) => {
     return real.getRankedFeed({
       freshness_days: freshnessDays,
       sources,
+      neighborhoods,
     })
   },
-  ['ranked-feed-v1'],
+  ['ranked-feed-v2'],
   { revalidate: 60, tags: ['feed'] },
 )
 
 export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListing[]> {
+  // Normalize neighborhoods so the cache key is stable across [a,b] / [b,a].
+  const normalizedNbhds =
+    opts.neighborhoods && opts.neighborhoods.length > 0
+      ? [...new Set(opts.neighborhoods.map((n) => n.toLowerCase()))].sort()
+      : undefined
+
   if (process.env.DATABASE_URL) {
     try {
-      const rows = await _cachedRealFeed(opts.freshnessDays, opts.sources)
-      if (rows.length > 0) return applyExtendedFilters(rows, opts)
+      const rows = await _cachedRealFeed(
+        opts.freshnessDays,
+        opts.sources,
+        normalizedNbhds,
+      )
+      if (rows.length > 0) {
+        // Drop `neighborhoods` from the JS-side post-filter — already applied at SQL.
+        const { neighborhoods: _drop, ...rest } = opts
+        return applyExtendedFilters(rows, rest)
+      }
+      // Empty result with neighborhoods filter active: tell the caller honestly
+      // (don't paper over with mocks).
+      if (normalizedNbhds && normalizedNbhds.length > 0) return []
       // Empty DB → fall through to mocks so design-time isn't a blank page.
     } catch (err) {
       console.warn('[feed-data] DB read failed, falling back to mocks:', (err as Error).message)

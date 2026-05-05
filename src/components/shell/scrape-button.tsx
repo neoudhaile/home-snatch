@@ -41,6 +41,8 @@ export function ScrapeButton() {
   const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
+  /** Count of newly-ingested listings from the most recent successful scrape. */
+  const [recent, setRecent] = useState<number | null>(null)
 
   // Detect prefers-reduced-motion so the spinner can stop animating for
   // users who opted out.
@@ -51,6 +53,14 @@ export function ScrapeButton() {
     mq.addEventListener('change', update)
     return () => mq.removeEventListener('change', update)
   }, [])
+
+  // Auto-clear the count badge ~5s after a successful scrape so it doesn't
+  // linger forever in the header.
+  useEffect(() => {
+    if (recent == null) return
+    const t = setTimeout(() => setRecent(null), 5000)
+    return () => clearTimeout(t)
+  }, [recent])
 
   const onClick = useCallback(async () => {
     if (isLoading) return
@@ -114,6 +124,7 @@ export function ScrapeButton() {
           }.`,
           { id: toastId },
         )
+        setRecent(data.ingested)
         router.refresh()
       }
     } catch (err) {
@@ -143,6 +154,14 @@ export function ScrapeButton() {
         aria-hidden
       />
       <span className="hidden sm:inline">{isLoading ? 'Scraping' : 'Refresh'}</span>
+      {recent != null && recent > 0 ? (
+        <span
+          className="tabular ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-300"
+          aria-label={`${recent} new`}
+        >
+          +{recent}
+        </span>
+      ) : null}
     </button>
   )
 }

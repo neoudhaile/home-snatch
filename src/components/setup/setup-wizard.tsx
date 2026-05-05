@@ -82,8 +82,13 @@ export function SetupWizard({ seed }: { seed: Seed }) {
         toast.error('Could not save profile.')
         return
       }
-      toast.success('Profile saved.')
-      router.push('/')
+      // Server already revalidated the `feed` cache tag and kicked off a
+      // background rescore via Next 16 `after()`. Bust the client router
+      // cache, then route to the feed with a `welcome` flag so the feed
+      // shell renders the "re-ranking" banner.
+      toast.success('Saved. Re-ranking against your profile.')
+      router.refresh()
+      router.replace('/?welcome=1')
     } catch {
       toast.error('Network error.')
     } finally {
@@ -248,8 +253,12 @@ export function SetupWizard({ seed }: { seed: Seed }) {
           isLast={isLastStep}
           submitting={submitting}
           canAdvance={canAdvance}
+          stepKey={effectiveStepKey}
           onPrev={() => dispatch({ type: 'prev' })}
           onNext={onNext}
+          // Skip just advances the step without mutating the active profile.
+          // The user can still come back via Back if they change their mind.
+          onSkip={() => dispatch({ type: 'next' })}
         />
       </main>
     </>
@@ -310,23 +319,41 @@ function StepFrame({
   )
 }
 
+/**
+ * Steps the user can skip without breaking the joint constraints. Areas +
+ * budget + beds are required (they drive every score). Vibes / commute /
+ * must-haves / deal-breakers / notes are nice-to-have signal — skippable.
+ */
+const SKIPPABLE_STEPS: ReadonlyArray<(typeof STEPS)[number]> = [
+  'must',
+  'breakers',
+  'vibes',
+  'commute',
+  'notes',
+]
+
 function NavRow({
   step,
   total: _total,
   isLast,
   submitting,
   canAdvance,
+  stepKey,
   onPrev,
   onNext,
+  onSkip,
 }: {
   step: number
   total: number
   isLast: boolean
   submitting: boolean
   canAdvance: boolean
+  stepKey: (typeof STEPS)[number]
   onPrev: () => void
   onNext: () => void
+  onSkip: () => void
 }) {
+  const skippable = SKIPPABLE_STEPS.includes(stepKey)
   return (
     <div className="mt-8 flex items-center justify-between gap-3">
       <Button
@@ -338,28 +365,40 @@ function NavRow({
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
         Back
       </Button>
-      <Button
-        onClick={onNext}
-        disabled={!canAdvance || submitting}
-        className="h-9 cursor-pointer rounded-full px-5 text-[13px]"
-      >
-        {submitting ? (
-          <>
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            Saving…
-          </>
-        ) : isLast ? (
-          <>
-            Save and continue
-            <Check className="h-3.5 w-3.5" aria-hidden />
-          </>
-        ) : (
-          <>
-            Continue
-            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-          </>
-        )}
-      </Button>
+      <div className="flex items-center gap-2">
+        {skippable && !isLast ? (
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={submitting}
+            className="tabular cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            Skip step
+          </button>
+        ) : null}
+        <Button
+          onClick={onNext}
+          disabled={!canAdvance || submitting}
+          className="h-9 cursor-pointer rounded-full px-5 text-[13px]"
+        >
+          {submitting ? (
+            <>
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              Saving…
+            </>
+          ) : isLast ? (
+            <>
+              Save and start ranking
+              <Check className="h-3.5 w-3.5" aria-hidden />
+            </>
+          ) : (
+            <>
+              Continue
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -853,17 +892,159 @@ function ReviewStep({
         ? [state.profiles[state.who]]
         : state.profiles
 
+  const [showJson, setShowJson] = useState(false)
+
   return (
     <div>
       <h1 className="serif text-[34px] leading-tight tracking-[-0.01em] text-foreground sm:text-[42px]">
         Looks right?
       </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
-        Save to start ranking. You can edit any of this later in <code className="rounded bg-secondary px-1.5 py-0.5 text-[12px]">src/profiles/</code>.
+        Save and start ranking — we&apos;ll use these to rank listings live.
+        Edit anytime in <code className="rounded bg-secondary px-1.5 py-0.5 text-[12px]">src/profiles/</code>.
       </p>
-      <pre className="mt-6 max-h-[420px] overflow-auto rounded-2xl border border-border bg-surface-2 p-4 font-mono text-[12px] leading-relaxed text-foreground/90">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {profiles.map((p) => (
+          <ProfileSummaryCard key={p.slug} profile={p} />
+        ))}
+      </div>
+      <div className="mt-5 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setShowJson((v) => !v)}
+          className="tabular cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {showJson ? 'Hide JSON' : 'Show JSON'}
+        </button>
+      </div>
+      {showJson ? (
+        <pre className="mt-3 max-h-[420px] overflow-auto rounded-2xl border border-border bg-surface-2 p-4 font-mono text-[12px] leading-relaxed text-foreground/90">
 {JSON.stringify(profiles, null, 2)}
-      </pre>
+        </pre>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * One card per profile. Surfaces the decision-relevant fields (budget, beds,
+ * top must-haves, top areas, vibe summary) so the user can sanity-check
+ * what's about to be saved without parsing JSON.
+ */
+function ProfileSummaryCard({ profile: p }: { profile: WizardProfile }) {
+  const topMustHaves = p.must_have.slice(0, 3)
+  const topAreas = p.preferred_areas.slice(0, 3)
+  const moreAreas = Math.max(0, p.preferred_areas.length - topAreas.length)
+  const moreMust = Math.max(0, p.must_have.length - topMustHaves.length)
+  // Pick the two highest-weighted vibes for a 2-line summary.
+  const vibeEntries = Object.entries(p.vibes) as Array<
+    [keyof WizardProfile['vibes'], number]
+  >
+  const topVibes = vibeEntries
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .filter(([, v]) => v > 0)
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="serif text-[20px] leading-tight tracking-tight text-foreground">
+          {p.name}
+        </h3>
+        <span className="tabular text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">
+          {p.slug}
+        </span>
+      </div>
+
+      <dl className="mt-3 space-y-2 text-[12.5px]">
+        <SummaryRow
+          label="Budget"
+          value={
+            <span className="tabular">
+              ${p.budget_min.toLocaleString()}–${p.budget_max.toLocaleString()}
+              <span className="text-muted-foreground">/mo</span>
+            </span>
+          }
+        />
+        <SummaryRow
+          label="Beds"
+          value={p.beds.length > 0 ? p.beds.join(' · ') : '—'}
+        />
+        <SummaryRow
+          label="Must-haves"
+          value={
+            topMustHaves.length === 0 ? (
+              <span className="text-muted-foreground">none picked</span>
+            ) : (
+              <span>
+                {topMustHaves.map((m) => m.replace(/-/g, ' ')).join(' · ')}
+                {moreMust > 0 ? (
+                  <span className="text-muted-foreground"> +{moreMust} more</span>
+                ) : null}
+              </span>
+            )
+          }
+        />
+        <SummaryRow
+          label="Areas"
+          value={
+            topAreas.length === 0 ? (
+              <span className="text-muted-foreground">no preference</span>
+            ) : (
+              <span>
+                {topAreas.join(' · ')}
+                {moreAreas > 0 ? (
+                  <span className="text-muted-foreground"> +{moreAreas} more</span>
+                ) : null}
+              </span>
+            )
+          }
+        />
+        {topVibes.length > 0 ? (
+          <SummaryRow
+            label="Vibe"
+            value={topVibes
+              .map(([k, v]) => `${String(k).replace(/_/g, ' ')} ${v}/10`)
+              .join(' · ')}
+          />
+        ) : null}
+        {p.commute.length > 0 ? (
+          <SummaryRow
+            label="Commute"
+            value={p.commute
+              .filter((c) => c.to.trim().length > 0)
+              .map((c) => `${c.to} ≤ ${c.max_minutes}m`)
+              .join(' · ')}
+          />
+        ) : null}
+        {p.notes.trim().length > 0 ? (
+          <SummaryRow
+            label="Notes"
+            value={
+              <span className="line-clamp-2 text-foreground/80">
+                {p.notes}
+              </span>
+            }
+          />
+        ) : null}
+      </dl>
+    </div>
+  )
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string
+  value: React.ReactNode
+}) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <dt className="w-[68px] shrink-0 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="min-w-0 flex-1 text-foreground/90">{value}</dd>
     </div>
   )
 }

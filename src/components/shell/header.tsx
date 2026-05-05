@@ -7,11 +7,24 @@ import { FreshnessSelector } from './freshness-selector'
 import { SourceFilter } from './source-filter'
 import { SearchInput } from './search-input'
 import { ScrapeButton } from './scrape-button'
+import { cn } from '@/lib/utils'
 import type { Source } from '@/types'
 
 export type HeaderState = {
   freshness: 1 | 7 | 14 | 30
   sources: Source[]
+}
+
+/**
+ * "My areas" / "All NYC" toggle config. Only rendered when the user actually
+ * has joint preferred_areas configured — the toggle is a no-op otherwise.
+ */
+export type AreasToggle = {
+  /** True = currently filtered to joint preferred_areas. False = showing all NYC. */
+  active: boolean
+  /** The joint area list (used for tooltip + summary). */
+  jointAreas: string[]
+  onToggle: () => void
 }
 
 export function Header({
@@ -22,6 +35,7 @@ export function Header({
   showSearch = true,
   showScrape = true,
   initialQuery,
+  areasToggle,
 }: {
   state: HeaderState
   onChange: (next: HeaderState) => void
@@ -35,6 +49,8 @@ export function Header({
    */
   showScrape?: boolean
   initialQuery?: string
+  /** Optional "My areas" toggle. Rendered between freshness + source. */
+  areasToggle?: AreasToggle
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -75,6 +91,7 @@ export function Header({
               value={state.freshness}
               onChange={(freshness) => onChange({ ...state, freshness })}
             />
+            {areasToggle ? <AreasPill toggle={areasToggle} /> : null}
             <SourceFilter
               value={state.sources}
               onChange={(sources) => onChange({ ...state, sources })}
@@ -134,6 +151,7 @@ export function Header({
             value={state.freshness}
             onChange={(freshness) => onChange({ ...state, freshness })}
           />
+          {areasToggle ? <AreasPill toggle={areasToggle} /> : null}
           <SourceFilter
             value={state.sources}
             onChange={(sources) => onChange({ ...state, sources })}
@@ -142,5 +160,59 @@ export function Header({
         </div>
       ) : null}
     </header>
+  )
+}
+
+/**
+ * "My areas" ↔ "All NYC" toggle. Compact two-segment pill that mirrors the
+ * freshness selector visual so it feels native to the filter cluster.
+ */
+function AreasPill({ toggle }: { toggle: AreasToggle }) {
+  const tip =
+    toggle.jointAreas.length === 0
+      ? undefined
+      : toggle.jointAreas.join(', ')
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Area filter"
+      title={tip}
+      className="inline-flex items-center gap-0.5 rounded-full border border-border bg-surface-2 p-0.5"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={toggle.active}
+        onClick={() => {
+          if (!toggle.active) toggle.onToggle()
+        }}
+        className={cn(
+          'tabular relative h-7 cursor-pointer rounded-full px-3 text-[12px] font-medium transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+          toggle.active
+            ? 'bg-foreground text-background'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        My areas
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!toggle.active}
+        onClick={() => {
+          if (toggle.active) toggle.onToggle()
+        }}
+        className={cn(
+          'tabular relative h-7 cursor-pointer rounded-full px-3 text-[12px] font-medium transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+          !toggle.active
+            ? 'bg-foreground text-background'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        All NYC
+      </button>
+    </div>
   )
 }

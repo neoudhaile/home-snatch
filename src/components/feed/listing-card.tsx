@@ -22,18 +22,35 @@ const VARIANT_CLASSES: Record<ListingCardVariant, string> = {
 export function ListingCard({
   listing,
   variant = 'compact',
+  currentProfileHash = '',
 }: {
   listing: RankedListing
   variant?: ListingCardVariant
+  /**
+   * Live profile-set hash. When this listing's score was computed against a
+   * different hash, the score badge renders a faint "rescoring" shimmer to
+   * tell the user we're recomputing top picks against their new profile.
+   */
+  currentProfileHash?: string
 }) {
   const photo = listing.photos?.[0]
   const vibes = topVibes(listing.vibe, variant === 'compact' ? 2 : 3)
   const score = listing.score?.score ?? 0
+  // A score is "stale" when the current profile hash is non-empty (we know
+  // what the live profile set looks like) AND the score was computed against
+  // some other hash (or no hash at all, e.g. mock data when DB is wired).
+  // Mocks emit `profile_set_hash: 'mock'` — those should never flag stale.
+  const scoreHash = listing.score?.profile_set_hash ?? ''
+  const stale =
+    currentProfileHash.length > 0 &&
+    scoreHash.length > 0 &&
+    scoreHash !== 'mock' &&
+    scoreHash !== currentProfileHash
 
   return (
     <Link
       href={`/listing/${listing.id}`}
-      aria-label={`${listing.title}, score ${score}`}
+      aria-label={`${listing.title}, score ${score}${stale ? ', rescoring' : ''}`}
       className={cn(
         'group relative isolate flex cursor-pointer overflow-hidden rounded-2xl bg-card',
         'border border-border ring-0 ring-foreground/0',
@@ -44,11 +61,11 @@ export function ListingCard({
       )}
     >
       {variant === 'featured' ? (
-        <FeaturedCard listing={listing} photo={photo} vibes={vibes} score={score} />
+        <FeaturedCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
       ) : variant === 'wide' ? (
-        <WideCard listing={listing} photo={photo} vibes={vibes} score={score} />
+        <WideCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
       ) : (
-        <CompactCard listing={listing} photo={photo} vibes={vibes} score={score} />
+        <CompactCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
       )}
     </Link>
   )
@@ -61,11 +78,13 @@ function FeaturedCard({
   photo,
   vibes,
   score,
+  stale,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
+  stale: boolean
 }) {
   return (
     <div className="relative flex h-full w-full flex-col">
@@ -83,7 +102,9 @@ function FeaturedCard({
         )}
         <div className="photo-overlay pointer-events-none absolute inset-0" />
         <div className="absolute right-4 top-4">
-          <ScoreBadge score={score} size="xl" />
+          <RescoringWrap stale={stale} size="xl">
+            <ScoreBadge score={score} size="xl" />
+          </RescoringWrap>
         </div>
         <div className="absolute left-4 top-4 flex items-center gap-1.5">
           <SourceBadge source={listing.source} variant="onPhoto" />
@@ -119,11 +140,13 @@ function WideCard({
   photo,
   vibes,
   score,
+  stale,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
+  stale: boolean
 }) {
   return (
     <div className="relative flex h-full w-full">
@@ -140,7 +163,9 @@ function WideCard({
           <PhotoMissing />
         )}
         <div className="absolute right-2 top-2">
-          <ScoreBadge score={score} size="md" />
+          <RescoringWrap stale={stale} size="md">
+            <ScoreBadge score={score} size="md" />
+          </RescoringWrap>
         </div>
       </div>
       <div className="flex min-w-0 flex-1 flex-col justify-between p-4">
@@ -169,11 +194,13 @@ function CompactCard({
   photo,
   vibes,
   score,
+  stale,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
+  stale: boolean
 }) {
   return (
     <div className="relative flex h-full w-full flex-col">
@@ -190,7 +217,9 @@ function CompactCard({
           <PhotoMissing />
         )}
         <div className="absolute right-2.5 top-2.5">
-          <ScoreBadge score={score} size="md" />
+          <RescoringWrap stale={stale} size="md">
+            <ScoreBadge score={score} size="md" />
+          </RescoringWrap>
         </div>
         <div className="absolute left-2.5 top-2.5">
           <SourceBadge source={listing.source} variant="onPhoto" />
@@ -216,6 +245,46 @@ function CompactCard({
 }
 
 /* ---------- inner pieces ---------- */
+
+/**
+ * Wraps a `<ScoreBadge>` with a faint, slow-pulsing ring + tooltip when the
+ * underlying score was computed against a different profile_set_hash. Signals
+ * "we are recomputing this against your new profile, hang tight." Subtle —
+ * the score number is still legible and accurate-as-of-last-batch.
+ */
+function RescoringWrap({
+  stale,
+  size,
+  children,
+}: {
+  stale: boolean
+  size: 'md' | 'xl'
+  children: React.ReactNode
+}) {
+  if (!stale) return <>{children}</>
+  // Outer halo sized one tier larger than the badge so the ring feels integral
+  // rather than slapped on. md→44px wrap, xl→72px wrap.
+  const wrapSize = size === 'xl' ? 'h-[72px] w-[72px]' : 'h-11 w-11'
+  return (
+    <span
+      title="Rescoring against your updated profile"
+      aria-label="Rescoring against your updated profile"
+      className={cn(
+        'relative inline-grid place-items-center rounded-full',
+        'ring-1 ring-foreground/20 motion-safe:animate-pulse',
+        wrapSize,
+      )}
+    >
+      {children}
+      <span
+        aria-hidden
+        className="absolute -bottom-0.5 -right-0.5 grid h-3 w-3 place-items-center rounded-full bg-background ring-1 ring-foreground/20"
+      >
+        <span className="block h-1 w-1 rounded-full bg-muted-foreground motion-safe:animate-pulse" />
+      </span>
+    </span>
+  )
+}
 
 function PhotoMissing() {
   return (

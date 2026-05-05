@@ -7,14 +7,29 @@ import { ListingCard, type ListingCardVariant } from './listing-card'
  * the next two get 2x1 wides; remaining cells are 1x1 compacts.
  *
  * The mix is recomputed every 8 cards so a long feed still has rhythm.
+ *
+ * `currentProfileHash` (optional) is the live profile-set hash. Each card
+ * compares its score's `profile_set_hash` against this — mismatch means a
+ * background rescore is in flight, surfaced as a faint shimmer on the score.
  */
-export function BentoGrid({ listings }: { listings: RankedListing[] }) {
+export function BentoGrid({
+  listings,
+  currentProfileHash = '',
+}: {
+  listings: RankedListing[]
+  currentProfileHash?: string
+}) {
   const variants = assignVariants(listings.length)
 
   return (
     <div className="bento">
       {listings.map((l, i) => (
-        <ListingCard key={l.id} listing={l} variant={variants[i]} />
+        <ListingCard
+          key={l.id}
+          listing={l}
+          variant={variants[i]}
+          currentProfileHash={currentProfileHash}
+        />
       ))}
     </div>
   )

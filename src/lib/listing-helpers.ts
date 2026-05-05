@@ -226,6 +226,13 @@ export type RankedFeedOptions = {
   min_score?: number
   /** Maximum rows. Default 200. */
   limit?: number
+  /**
+   * Restrict to listings whose `neighborhood` matches one of these
+   * (case-insensitive substring via SQL ILIKE ANY). The user's joint
+   * `preferred_areas` becomes the default filter on the feed page; pass
+   * an empty array or omit to skip.
+   */
+  neighborhoods?: string[]
 }
 
 type RawScoreRow = {
@@ -378,17 +385,32 @@ export async function getRankedFeed(
   const sources = opts.sources && opts.sources.length > 0 ? opts.sources : null
   const minScore = opts.min_score ?? 0
   const limit = opts.limit ?? 200
+  const neighborhoods =
+    opts.neighborhoods && opts.neighborhoods.length > 0 ? opts.neighborhoods : null
 
   const db = getDb()
   const cutoff = new Date(Date.now() - freshnessDays * 24 * 60 * 60 * 1000)
 
-  // 1. Single round trip: listings (active+fresh+source) LEFT JOIN LATERAL
-  // most-recent score per listing. The LATERAL form lets the planner pick the
-  // top row per outer row without a window function over the entire scores
-  // table. We re-cap to `limit` after JS-side enrichment so the over-fetch
-  // (limit*4) compensates for any unscored rows being filtered out.
+  // 1. Single round trip: listings (active+fresh+source+neighborhood) LEFT
+  // JOIN LATERAL most-recent score per listing. The LATERAL form lets the
+  // planner pick the top row per outer row without a window function over
+  // the entire scores table. We re-cap to `limit` after JS-side enrichment
+  // so the over-fetch (limit*4) compensates for any unscored rows being
+  // filtered out.
   const sourceFilter = sources
     ? sql`AND l.source IN (${sql.join(sources.map((s) => sql`${s}`), sql`, `)})`
+    : sql``
+
+  // Neighborhood filter: case-insensitive substring match against
+  // `listings.neighborhood`. The user's preferred_areas (e.g. "SoHo",
+  // "East Village") are wrapped with `%foo%` and matched with
+  // `lower(neighborhood) ILIKE ANY (...)`. Substring (not exact) so that
+  // "Bedford-Stuyvesant" matches "Bed-Stuy" and "Crown Heights North"
+  // matches "Crown Heights".
+  const neighborhoodFilter = neighborhoods
+    ? sql`AND l.neighborhood IS NOT NULL AND lower(l.neighborhood) ILIKE ANY (${neighborhoods.map(
+        (n) => `%${n.toLowerCase()}%`,
+      )}::text[])`
     : sql``
 
   type JoinedRow = Listing & {
@@ -424,6 +446,7 @@ export async function getRankedFeed(
       WHERE l.is_active = true
         AND l.posted_at >= ${cutoff}
         ${sourceFilter}
+        ${neighborhoodFilter}
       ORDER BY l.posted_at DESC
       LIMIT ${limit * 4}
     `)) as unknown as JoinedRow[]
