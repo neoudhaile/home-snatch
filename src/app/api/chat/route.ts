@@ -93,7 +93,8 @@ Formatting:
 Behavior:
 - When the user asks about apartments, USE TOOLS first. Don't guess. Call list_listings or get_saved or compare_listings to get fresh data.
 - Use live_search when the user asks for something the DB might not cover yet — a specific niche neighborhood + amenity combo, very-just-posted listings ("posted in the last hour", "today only"), or when list_listings returns 0 results for a real-sounding query. Don't use it for routine "show me top 5" queries — list_listings is cached and instant; live_search costs creds and 10–60 seconds.
-- You have a live \`web_search\` tool. Use it when the user asks for fresh listings the DB hasn't ingested yet, or for one-off questions about NYC neighborhoods (subway changes, crime news, restaurant openings — things that change). Prefer \`list_listings\` for ranked, scored search; use \`web_search\` for everything else.
+- Tool fallback chain for fresh listings: try \`list_listings\` first (instant, scored). If 0 results, try \`web_search\` (live web, fast). If web_search returns a 400 / blocked-domain / no results / fewer than 3 useful results, IMMEDIATELY fall back to \`live_search\` (runs Apify on Zillow / StreetEasy / Apartments / Realtor — bypasses bot walls). Apify takes 30-90s but works on sites that block Anthropic's crawler. Tell the user "let me run a deeper search across the listing sites" before calling live_search so they understand the wait.
+- For one-off NYC neighborhood questions (subway changes, crime news, restaurant openings — things that change), \`web_search\` is the right tool — listings aren't relevant.
 - When citing web search results, format URLs as standard markdown links. Don't pretend search results are scored listings — only items in the DB get scores. Web-search hits don't carry a UUID, so don't emit them with the \`listing:UUID\` scheme.
 - When citing a listing from the DB, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities) alongside the citation link.
 - Be concise: 1-3 sentences per response unless explicitly asked for more, OR when a table / list is the clearer answer.
@@ -145,25 +146,14 @@ const WEB_SEARCH_USER_LOCATION: Anthropic.UserLocation = {
  * snippets). This list is conservative; remove entirely if the model gets
  * over-constrained.
  */
-const WEB_SEARCH_ALLOWED_DOMAINS = [
-  'streeteasy.com',
-  'zillow.com',
-  'craigslist.org',
-  'reddit.com',
-  'listingsproject.com',
-  'apartments.com',
-  'realtor.com',
-  'redfin.com',
-  'hotpads.com',
-  'renthop.com',
-  'trulia.com',
-  'nytimes.com',
-  'thecity.nyc',
-  'gothamist.com',
-  'mta.info',
-  'ny.curbed.com',
-  'brickunderground.com',
-]
+// Anthropic's web_search user-agent is blocked by several sites' robots.txt.
+// Confirmed blocked by error response: nytimes.com, reddit.com, realtor.com.
+// Suspected: streeteasy/zillow/trulia/apartments/redfin (hard CDN walls).
+// We pass NO allowed_domains so the model can search anywhere Anthropic's
+// crawler is permitted. The system prompt steers it toward NYC sources, and
+// when web_search comes back empty/blocked the model falls back to
+// `live_search` (which runs our Apify actors — bypasses the bot walls).
+const WEB_SEARCH_ALLOWED_DOMAINS: string[] | undefined = undefined
 
 /**
  * Built-in `web_search` server-side tool. Anthropic runs the search itself
@@ -183,7 +173,7 @@ const WEB_SEARCH_TOOL: Anthropic.WebSearchTool20260209 = {
   type: 'web_search_20260209',
   name: 'web_search',
   max_uses: 5,
-  allowed_domains: WEB_SEARCH_ALLOWED_DOMAINS,
+  ...(WEB_SEARCH_ALLOWED_DOMAINS ? { allowed_domains: WEB_SEARCH_ALLOWED_DOMAINS } : {}),
   user_location: WEB_SEARCH_USER_LOCATION,
 }
 

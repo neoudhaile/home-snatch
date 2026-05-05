@@ -13,9 +13,12 @@
 
 import { z } from 'zod'
 import { sql } from 'drizzle-orm'
-import { profiles } from '@/db/schema'
+import { revalidateTag } from 'next/cache'
+import { after } from 'next/server'
+import { profiles, listings as listingsTable, scores as scoresTable } from '@/db/schema'
 import { getDb } from '@/lib/db'
-import { loadAllProfileFiles } from '@/lib/profile-set'
+import { loadAllProfileFiles, clearProfileFileCache } from '@/lib/profile-set'
+import { scoreListings } from '@/agents/score'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -160,6 +163,52 @@ export async function POST(req: Request) {
         .returning()
       saved.push(row)
     }
+    // Profiles changed → joint constraints + profile_set_hash changed → existing
+    // scores are stale. Bust the feed/dq caches NOW so the next render shows the
+    // re-rank, and kick off a rescore in the background (after() keeps it alive
+    // past the response on Vercel).
+    try {
+      revalidateTag('feed', 'max')
+      revalidateTag('dq', 'max')
+    } catch {
+      /* outside request scope when /api/profile is hit during build */
+    }
+    clearProfileFileCache()
+
+    after(async () => {
+      try {
+        const db = getDb()
+        const allListings = await db.select().from(listingsTable)
+        if (allListings.length === 0) return
+        const freshProfiles = await loadAllProfileFiles()
+        if (freshProfiles.length === 0) return
+        const out = await scoreListings(allListings, {
+          profilesOverride: freshProfiles,
+          hpdByListingId: new Map(),
+          rentStabByListingId: new Map(),
+          stations: [],
+          skipAlreadyScored: true,
+        })
+        for (const s of out) {
+          await db
+            .insert(scoresTable)
+            .values(s)
+            .onConflictDoUpdate({
+              target: [scoresTable.listing_id, scoresTable.profile_set_hash],
+              set: s,
+            })
+        }
+        try {
+          revalidateTag('feed', 'max')
+        } catch {
+          /* ignore */
+        }
+        console.log(`[api/profile] background rescore wrote ${out.length} scores`)
+      } catch (err) {
+        console.error('[api/profile] background rescore failed', err)
+      }
+    })
+
     return Response.json(
       bodies.length === 1 ? { profile: saved[0] } : { profiles: saved },
       { status: 200 }
