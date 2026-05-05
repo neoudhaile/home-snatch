@@ -434,7 +434,10 @@ export async function getRankedFeedWithCounts(
   const includeNullNbhd = opts.includeNullNeighborhoods === true
 
   const db = getDb()
-  const cutoff = new Date(Date.now() - freshnessDays * 24 * 60 * 60 * 1000)
+  // Drizzle's db.execute(sql`${date}`) binds Dates via toString() which
+  // Postgres can't parse ('Tue Apr 21 2026 11:28:21 GMT-0700 (PDT)'). Pass
+  // an ISO string so the bind succeeds — postgres-js casts it to timestamptz.
+  const cutoff = new Date(Date.now() - freshnessDays * 24 * 60 * 60 * 1000).toISOString()
 
   // 1. Single round trip: listings (active+fresh+source+neighborhood) LEFT
   // JOIN LATERAL most-recent score per listing. The LATERAL form lets the
