@@ -1132,15 +1132,18 @@ export async function getRankedFeedWithCounts(
           neighborhood_counts: result.neighborhood_counts,
         }
       }
-      // Empty result with neighborhoods filter active: tell the caller honestly
-      // (don't paper over with mocks). Counts still ship through so the chip
-      // row can render "+0" honestly.
-      if (normalizedNbhds && normalizedNbhds.length > 0) {
-        return { listings: [], neighborhood_counts: result.neighborhood_counts }
+      // PRODUCTION: when DATABASE_URL is set we trust the DB. Empty result is
+      // an honest empty (let the empty-state CTA handle it) — never paper
+      // over with mocks because mock UUIDs aren't in `listings` and saving
+      // them 422s. Counts ship through so chips show real availability.
+      const { neighborhoods: _drop, ...rest } = opts
+      return {
+        listings: applyExtendedFilters(result.listings, rest),
+        neighborhood_counts: result.neighborhood_counts,
       }
-      // Empty DB → fall through to mocks so design-time isn't a blank page.
     } catch (err) {
       console.warn('[feed-data] DB read failed, falling back to mocks:', (err as Error).message)
+      // Only path that still uses mocks: DB literally unreachable.
     }
   }
   const { freshnessDays = 14, sources } = opts
