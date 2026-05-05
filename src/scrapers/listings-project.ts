@@ -129,6 +129,23 @@ function fromNextData(nd: NextData, sourceUrl: string): NewListing[] {
   return out
 }
 
+/** Normalize a JSON-LD `image` field — string | string[] | { url } | { url }[]. */
+function jsonLdImages(o: Record<string, unknown>): string[] {
+  const raw = o['image'] ?? o['photos'] ?? o['images']
+  if (!raw) return []
+  const arr = Array.isArray(raw) ? raw : [raw]
+  const out: string[] = []
+  for (const v of arr) {
+    if (typeof v === 'string' && /^https?:\/\//.test(v)) {
+      out.push(v)
+    } else if (v && typeof v === 'object') {
+      const url = (v as Record<string, unknown>).url
+      if (typeof url === 'string' && /^https?:\/\//.test(url)) out.push(url)
+    }
+  }
+  return out
+}
+
 function fromJsonLd($: Cheerio$, sourceUrl: string): NewListing[] {
   const out: NewListing[] = []
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -158,7 +175,8 @@ function fromJsonLd($: Cheerio$, sourceUrl: string): NewListing[] {
         description: pickStr(o, 'description'),
         price_monthly: price ?? null,
         beds: parseBeds(title),
-        photos: [],
+        // schema.org/Apartment carries `image` as string|string[]|{url}|{url}[]
+        photos: jsonLdImages(o),
         is_active: true,
         raw: { jsonld: o, source_path: sourceUrl },
       })
@@ -174,13 +192,32 @@ function fromHtmlCards($: Cheerio$, sourceUrl: string): NewListing[] {
     if (!href || !/\/listings\/[A-Za-z0-9-]+/.test(href)) return
     const url = absoluteUrl(href, ROOT)
     if (!url) return
-    const title = $(el).text().trim().slice(0, 200)
+    const $a = $(el)
+    const title = $a.text().trim().slice(0, 200)
     if (!title) return
+    // Pull any <img> inside or adjacent to the card link. Listings Project's
+    // grid cards typically wrap a thumb in <a>; grab any image src/srcset.
+    const photoSet = new Set<string>()
+    $a.find('img').each((_i, img) => {
+      const $img = $(img)
+      const src = $img.attr('src') || $img.attr('data-src')
+      const abs = absoluteUrl(src, ROOT)
+      if (abs) photoSet.add(abs)
+      const srcset = $img.attr('srcset') || $img.attr('data-srcset')
+      if (srcset) {
+        // srcset is "url1 1x, url2 2x" — pull the URLs.
+        for (const part of srcset.split(',')) {
+          const u = part.trim().split(/\s+/)[0]
+          const abs2 = absoluteUrl(u, ROOT)
+          if (abs2) photoSet.add(abs2)
+        }
+      }
+    })
     out.push({
       source: 'listings-project',
       source_url: url,
       title,
-      photos: [],
+      photos: [...photoSet],
       is_active: true,
       raw: { source_path: sourceUrl, html_card: true },
     })

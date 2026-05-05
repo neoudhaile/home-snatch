@@ -304,7 +304,15 @@ function fallbackSummary(stats: RawMarketStats): { headline: string; three_obser
 
 export async function generateMarketSummary(): Promise<MarketSummary> {
   // Pull listings. getRankedFeed is fallback-safe (mocks if DB unset/empty).
-  const listings = await getRankedFeed({ freshness_days: 14, limit: 500 })
+  // Wrap defensively — a feed query throwing here used to take the entire
+  // /admin page to 500; now it falls through to the deterministic fallback.
+  let listings: RankedListing[] = []
+  try {
+    listings = await getRankedFeed({ freshness_days: 14, limit: 500 })
+  } catch (err) {
+    console.warn(`[insights] getRankedFeed failed: ${(err as Error).message}`)
+    listings = []
+  }
   const stats = computeRawMarketStats(listings, 14)
   const computed_at = new Date()
 

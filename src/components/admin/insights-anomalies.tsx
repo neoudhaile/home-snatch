@@ -3,10 +3,28 @@
  * Compact table, color-coded by severity. Each row links to the listing's
  * source URL in a new tab so the admin can investigate without leaving.
  */
-import { TriangleAlert, Info, ShieldAlert, ArrowUpRight } from 'lucide-react'
+import { TriangleAlert, Info, ShieldAlert, ArrowUpRight, AlertTriangle } from 'lucide-react'
 import { detectAnomalies, type Anomaly, type AnomalySeverity, type AnomalyType } from '@/lib/insights'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+
+/** Inline error card local to this panel so the rest of /admin keeps rendering. */
+function AnomaliesErrorCard({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card ring-1 ring-foreground/5">
+      <div className="flex items-baseline justify-between border-b border-border px-4 py-3">
+        <h3 className="text-[13px] font-medium text-foreground">Anomalies</h3>
+        <span className="tabular text-[11px] text-warm-fg">unavailable</span>
+      </div>
+      <div className="flex items-start gap-2.5 px-4 py-4">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warm-fg" />
+        <div className="min-w-0 break-all text-[12px] text-muted-foreground">
+          {message}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const TYPE_LABEL: Record<AnomalyType, string> = {
   price_outlier: 'price outlier',
@@ -23,7 +41,12 @@ const SEVERITY_STYLES: Record<AnomalySeverity, { tone: string; icon: React.Compo
 }
 
 export async function InsightsAnomalies() {
-  const rows = await detectAnomalies()
+  let rows: Anomaly[]
+  try {
+    rows = await detectAnomalies()
+  } catch (err) {
+    return <AnomaliesErrorCard message={(err as Error).message ?? 'unknown error'} />
+  }
   const counts = countBySeverity(rows)
 
   return (

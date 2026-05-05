@@ -2,9 +2,10 @@
 
 /**
  * "Scrape now" / Refresh button. Lives in the feed header. POSTs to
- * /api/refresh which runs the LIGHTWEIGHT direct scrapers (Craigslist /
- * Reddit / Listings Project) — no Apify. Apify runs only from the GH Actions
- * cron because of Vercel's 60s function cap.
+ * /api/refresh which runs the direct scrapers (Craigslist / Reddit /
+ * Listings Project) AND a TARGETED Apify pass (Zillow / StreetEasy /
+ * Apartments / Realtor) against the user's joint `preferred_areas`. The full
+ * NYC-wide Apify sweep still runs only from the GH Actions cron.
  *
  * UX notes:
  *   - 30s debounce via localStorage `homesnatch:last-scrape-at` so a stuck
@@ -29,12 +30,20 @@ const SOURCE_LABELS: Record<string, string> = {
   craigslist: 'Craigslist',
   reddit: 'Reddit',
   'listings-project': 'Listings Project',
+  zillow: 'Zillow',
+  streeteasy: 'StreetEasy',
+  apartments: 'Apartments',
+  realtor: 'Realtor',
 }
 
 type RefreshResponse = {
   ingested: number
   by_source: Record<string, number>
   duration_ms: number
+  apify?: 'used' | 'timeout' | 'skipped' | 'error'
+  apify_by_source?: Record<string, number>
+  ingested_direct?: number
+  ingested_apify?: number
 }
 
 export function ScrapeButton() {
@@ -118,10 +127,24 @@ export function ScrapeButton() {
         toast.message(`No new listings yet${detail}.`, { id: toastId })
       } else {
         const hitLabels = hits.map(([k, n]) => `${SOURCE_LABELS[k] ?? k}: ${n}`).join(', ')
+        // Distinguish direct vs Apify-targeted in the message so the user
+        // knows whether the refresh actually hit Zillow/SE/etc., not just CL.
+        const direct = data.ingested_direct ?? 0
+        const apify = data.ingested_apify ?? 0
+        let provenance = ''
+        if (direct > 0 && apify > 0) {
+          provenance = ` (${direct} direct, ${apify} Apify)`
+        } else if (apify > 0 && direct === 0) {
+          provenance = ` (Apify only)`
+        } else if (direct > 0 && data.apify === 'timeout') {
+          provenance = ` (direct only, Apify timed out)`
+        } else if (direct > 0 && data.apify === 'skipped') {
+          provenance = ` (direct only)`
+        }
         toast.success(
-          `Found ${data.ingested} listing${data.ingested === 1 ? '' : 's'}${
-            hitLabels ? `: ${hitLabels}` : ''
-          }.`,
+          `Found ${data.ingested} listing${data.ingested === 1 ? '' : 's'}${provenance}${
+            hitLabels ? `. ${hitLabels}` : '.'
+          }`,
           { id: toastId },
         )
         setRecent(data.ingested)

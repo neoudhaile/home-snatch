@@ -213,12 +213,30 @@ async function classifyPost(post: RedditPost): Promise<Classification | null> {
   }
 }
 
-/** Pull image URLs from a Reddit post (preview, link target, body text). */
+/**
+ * Pull image URLs from a Reddit post. Coverage:
+ *   1. Post target URL (`url_overridden_by_dest` || `url`) when it points
+ *      at i.redd.it / i.imgur.com / preview.redd.it / has an image extension.
+ *   2. `preview.images[].source.url` — the canonical large preview, HTML-
+ *      entity-decoded.
+ *   3. Image extension URLs in `selftext` (extractImageUrls regex).
+ *   4. Markdown image links `![alt](https://...)` and bare imgur / i.redd.it
+ *      / preview.redd.it URLs in `selftext` (no extension required — the
+ *      previous extension-only regex missed these).
+ *   5. Any URL on a Reddit-image host even without an extension.
+ */
 function postPhotos(post: RedditPost): string[] {
   const set = new Set<string>()
   const dest = post.url_overridden_by_dest || post.url
   if (dest && /\.(?:png|jpe?g|webp|gif)(?:\?|$)/i.test(dest)) set.add(dest)
-  if (dest && /^https?:\/\/(?:i\.redd\.it|i\.imgur\.com)\//.test(dest)) set.add(dest)
+  if (
+    dest &&
+    /^https?:\/\/(?:i\.redd\.it|i\.imgur\.com|imgur\.com|preview\.redd\.it|external-preview\.redd\.it)\//.test(
+      dest,
+    )
+  ) {
+    set.add(dest)
+  }
   for (const im of post.preview?.images ?? []) {
     const raw = im?.source?.url
     if (raw) {
@@ -226,7 +244,35 @@ function postPhotos(post: RedditPost): string[] {
       set.add(raw.replace(/&amp;/g, '&'))
     }
   }
-  for (const u of extractImageUrls(post.selftext || '')) set.add(u)
+
+  const body = post.selftext || ''
+  for (const u of extractImageUrls(body)) set.add(u)
+
+  // Markdown image syntax: ![alt](url)
+  for (const m of body.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi)) {
+    set.add(m[1])
+  }
+
+  // Markdown link syntax pointing at an image host: [text](url)
+  for (const m of body.matchAll(/\[[^\]]+\]\((https?:\/\/[^\s)]+)\)/gi)) {
+    const u = m[1]
+    if (
+      /^https?:\/\/(?:i\.redd\.it|i\.imgur\.com|imgur\.com|preview\.redd\.it|external-preview\.redd\.it)\//.test(
+        u,
+      ) ||
+      /\.(?:png|jpe?g|webp|gif)(?:\?|$)/i.test(u)
+    ) {
+      set.add(u)
+    }
+  }
+
+  // Bare URLs on image hosts — even without a recognizable extension.
+  for (const m of body.matchAll(
+    /\bhttps?:\/\/(?:i\.redd\.it|i\.imgur\.com|imgur\.com|preview\.redd\.it|external-preview\.redd\.it)\/[^\s)\]]+/gi,
+  )) {
+    set.add(m[0])
+  }
+
   return [...set]
 }
 

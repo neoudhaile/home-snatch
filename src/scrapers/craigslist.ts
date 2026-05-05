@@ -33,6 +33,55 @@ import {
 const SUBDOMAINS = ['newyork', 'brooklyn', 'queens', 'bronx', 'statenisland'] as const
 type Subdomain = (typeof SUBDOMAINS)[number]
 
+/**
+ * Find the JSON literal that follows `imgList = ` (or `var imgList = `) by
+ * walking brackets to find the matching close. Returns the JSON substring
+ * (including the outer brackets) or null if no balanced array could be
+ * located.
+ *
+ * The naive `\[[^\]]+\]` regex breaks on multi-photo CL listings: each photo
+ * object is `{"url": "https://...", "imgid": "..."}` and a 12-photo array is
+ * 12 such objects, with `]` characters appearing inside URLs (encoded) and
+ * across object boundaries. We track bracket depth to find the right close.
+ */
+function extractImgListJson(src: string): string | null {
+  const re = /imgList\s*=\s*\[/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(src))) {
+    const start = m.index + m[0].length - 1 // points at the opening `[`
+    let depth = 0
+    let inStr = false
+    let strCh = '"'
+    let escaped = false
+    for (let i = start; i < src.length; i++) {
+      const ch = src[i]
+      if (inStr) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === strCh) {
+          inStr = false
+        }
+        continue
+      }
+      if (ch === '"' || ch === "'") {
+        inStr = true
+        strCh = ch
+        continue
+      }
+      if (ch === '[') depth += 1
+      else if (ch === ']') {
+        depth -= 1
+        if (depth === 0) {
+          return src.slice(start, i + 1)
+        }
+      }
+    }
+  }
+  return null
+}
+
 /** Maximum number of detail pages fetched per borough per run (safety cap). */
 const MAX_DETAILS_PER_BOROUGH = 40
 
@@ -140,18 +189,43 @@ async function parseDetail(hit: SearchHit): Promise<NewListing | null> {
     if (abs) photoSet.add(abs)
   })
   // CL also embeds full-size URLs in `imgList` JSON in inline <script>. Try to lift them.
+  // The previous regex `/imgList\s*=\s*(\[[^\]]+\])/` was brittle: `[^\]]+` is
+  // greedy-but-bracket-shy, so on multi-photo arrays it matched only up to the
+  // FIRST `]` (e.g. inside the URL itself or across object boundaries),
+  // truncating the JSON and tossing the parse. We replace with a balanced-
+  // bracket walker: find `imgList = [`, then walk the string tracking depth,
+  // returning the slice ending at the matching outer `]`. This covers the
+  // 12-photo arrays we routinely see on Brooklyn listings without breaking
+  // on nested brackets in URL-encoded params.
   const inlineScripts = $('script')
     .map((_, el) => $(el).html() ?? '')
     .get()
     .join('\n')
-  const imgListMatch = inlineScripts.match(/imgList\s*=\s*(\[[^\]]+\])/)
-  if (imgListMatch) {
+  const imgListBalanced = extractImgListJson(inlineScripts)
+  if (imgListBalanced) {
     try {
-      const arr = JSON.parse(imgListMatch[1]) as Array<{ url?: string; imgid?: string }>
-      for (const it of arr) if (it?.url) photoSet.add(it.url)
+      const arr = JSON.parse(imgListBalanced) as Array<{
+        url?: string
+        imgid?: string
+      }>
+      for (const it of arr) {
+        if (it?.url) photoSet.add(it.url)
+        // Some CL forks emit `imgid` instead of `url`; reconstruct the standard
+        // 600x450 thumb URL when only an id is present.
+        else if (typeof it?.imgid === 'string' && /^[0-9A-Za-z]+_/.test(it.imgid)) {
+          photoSet.add(`https://images.craigslist.org/${it.imgid}_600x450.jpg`)
+        }
+      }
     } catch {
       // ignore — best effort
     }
+  }
+  // As a final safety net, scan the inline script blob for any
+  // `https://images.craigslist.org/...` URLs the parser missed.
+  for (const m of inlineScripts.matchAll(
+    /https?:\/\/images\.craigslist\.org\/[^\s"'<>]+\.(?:jpe?g|png|webp)/gi,
+  )) {
+    photoSet.add(m[0])
   }
   const ogImg = $('meta[property="og:image"]').attr('content')
   if (ogImg && photoSet.size === 0) {

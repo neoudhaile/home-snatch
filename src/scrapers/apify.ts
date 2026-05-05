@@ -53,10 +53,12 @@
  * you do, you'll likely also need to adjust the input shape in this file.
  */
 
+import pLimit from 'p-limit'
 import type { NewListing } from '@/types'
 import { loadAllProfileFiles, type ProfileFile } from '@/lib/profile-set'
 import { canonicalize } from '@/lib/neighborhoods'
 import { runApifyActorAsync } from '@/lib/apify-async'
+import { getAnthropic, MODELS } from '@/lib/anthropic'
 
 /**
  * Pick a non-null neighborhood from any of the candidate strings, then
@@ -239,11 +241,251 @@ function asPhotoArray(v: unknown): string[] {
       if (typeof it === 'string') return it
       if (it && typeof it === 'object') {
         const o = it as Record<string, unknown>
-        return (o.url as string) ?? (o.src as string) ?? (o.high_res as string) ?? null
+        // Cover the common shapes across Apify forks:
+        //   { url } / { src } / { high_res } / { mixedSources: { jpeg: [{ url }] } }
+        //   { mediaUrl } / { downloadUrl } / { fullUrl }
+        const direct =
+          (o.url as string) ??
+          (o.src as string) ??
+          (o.high_res as string) ??
+          (o.highRes as string) ??
+          (o.mediaUrl as string) ??
+          (o.downloadUrl as string) ??
+          (o.fullUrl as string) ??
+          (o.image as string) ??
+          (o.imageUrl as string) ??
+          null
+        if (direct) return direct
+        const mixed = o.mixedSources as
+          | { jpeg?: Array<{ url?: string }>; webp?: Array<{ url?: string }> }
+          | undefined
+        if (mixed) {
+          const fromJpeg = mixed.jpeg?.[0]?.url
+          if (fromJpeg) return fromJpeg
+          const fromWebp = mixed.webp?.[0]?.url
+          if (fromWebp) return fromWebp
+        }
       }
       return null
     })
     .filter((s): s is string => typeof s === 'string' && /^https?:\/\//.test(s))
+}
+
+/**
+ * Aggregate every plausible photo URL across a Zillow item, regardless of
+ * which actor fork emitted it. Zillow output across community actors variously
+ * names the array `imageUrls`, `responsivePhotos[].url`,
+ * `responsivePhotos[].mixedSources.jpeg[].url`, `photos[]`, `images[]`,
+ * `media[].url`, `hiResImageLink`, `desktopWebHdpImageLink`. We pull from
+ * all of them, dedupe by URL, and return.
+ */
+function collectZillowPhotos(item: Record<string, unknown>): string[] {
+  const set = new Set<string>()
+  const candidates: unknown[] = [
+    item.imageUrls,
+    item.images,
+    item.photos,
+    item.responsivePhotos,
+    item.media,
+    item.gallery,
+    item.photoUrls,
+    item.thumbnails,
+  ]
+  for (const c of candidates) {
+    for (const u of asPhotoArray(c)) set.add(u)
+  }
+  // Singletons
+  for (const k of [
+    'imageUrl',
+    'image',
+    'primaryImage',
+    'hiResImageLink',
+    'desktopWebHdpImageLink',
+    'mainImage',
+    'photoUrl',
+  ] as const) {
+    const v = item[k]
+    if (typeof v === 'string' && /^https?:\/\//.test(v)) set.add(v)
+  }
+  return [...set]
+}
+
+/**
+ * Walk a deeply nested record and return the first numeric/parseable price
+ * found at any of the supplied dotted-path candidates. Used to claw the
+ * monthly rent out of Apify outputs that wedge it into nested objects
+ * (`price.value`, `units[0].price`, `priceInfo.amount`, ...).
+ *
+ * Returns null when nothing usable is found. Caller is responsible for
+ * sanity-checking the result (e.g. ignore < $400 or > $50k).
+ */
+function deepPick(obj: unknown, paths: string[]): number | null {
+  for (const path of paths) {
+    const segs = path.split('.')
+    let cur: unknown = obj
+    for (const seg of segs) {
+      if (cur == null) break
+      if (Array.isArray(cur)) {
+        const idx = parseInt(seg, 10)
+        cur = Number.isFinite(idx) ? cur[idx] : undefined
+      } else if (typeof cur === 'object') {
+        cur = (cur as Record<string, unknown>)[seg]
+      } else {
+        cur = undefined
+      }
+    }
+    const n = asNumber(cur)
+    if (n != null && n >= 200 && n <= 50_000) return n
+  }
+  return null
+}
+
+/**
+ * The full price-fallback chain for any rental item. Walks every field
+ * commonly used across Zillow / StreetEasy / Apartments / Realtor / forks of
+ * those, then tries to pluck a `$1,234` substring out of any string-typed
+ * fallback fields. Returns null if no signal is found — caller's responsibility
+ * to invoke the Haiku fallback.
+ */
+function extractPriceFromAnyField(item: Record<string, unknown>): number | null {
+  // 1. Direct numeric/string fields commonly found at the top level.
+  const direct = deepPick(item, [
+    'price',
+    'priceMonthly',
+    'monthlyRent',
+    'monthly_rent',
+    'rentMin',
+    'rentMonthly',
+    'price_monthly',
+    'listingPrice',
+    'rent',
+    // Nested
+    'price.value',
+    'price.amount',
+    'priceInfo.amount',
+    'priceInfo.value',
+    'rentZestimate',
+    'monthlyHudListing',
+    'units.0.price',
+    'units.0.rent',
+    'units.0.priceMonthly',
+    'floorPlans.0.price',
+    'floorPlans.0.rent',
+    'rentRange.min',
+    'rentRange.max',
+    // String labels — asNumber strips $ + commas
+    'priceLabel',
+    'priceText',
+    'priceDisplay',
+    'rentText',
+    'rentLabel',
+  ])
+  if (direct != null) return direct
+
+  // 2. Final string scrape: walk every scalar string field and look for the
+  // first `$X,XXX` pattern. Cheap, covers actor outputs that buried the price
+  // in an HTML-derived `summary` / `headline` / `subtitle` field.
+  const stringFields: string[] = []
+  for (const v of Object.values(item)) {
+    if (typeof v === 'string') stringFields.push(v)
+  }
+  for (const s of stringFields) {
+    const m = s.match(/\$\s*(\d{3,5}(?:,\d{3})?)\s*(?:\/?\s*mo|per\s*month|monthly)?/i)
+    if (m) {
+      const n = parseInt(m[1].replace(/,/g, ''), 10)
+      if (Number.isFinite(n) && n >= 400 && n <= 50_000) return n
+    }
+  }
+
+  return null
+}
+
+/**
+ * Haiku fallback: when every structured field is null AND we have prose to
+ * read (description, title, raw HTML excerpt), ask Haiku for the monthly rent.
+ * Bounded to listings where price is otherwise null — never run on an item
+ * that already has a price.
+ *
+ * Returns the integer monthly rent, or null if Haiku can't find one.
+ */
+async function haikuPriceExtract(text: string): Promise<number | null> {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  const trimmed = text.trim().slice(0, 2000)
+  if (trimmed.length < 20) return null
+  try {
+    const client = getAnthropic()
+    const resp = await client.messages.create({
+      model: MODELS.extract,
+      max_tokens: 80,
+      temperature: 0,
+      system: [
+        {
+          type: 'text',
+          text:
+            'Extract the monthly rent in USD from the provided rental listing text. Respond with ONLY a single integer (e.g. 3200) or the literal string "null" if no monthly rent is mentioned. Do not include units, currency symbols, or any other text. If multiple prices are mentioned, pick the lowest plausible monthly rent (200..50000 USD).',
+          // Cache breakpoint: same system across many Haiku price-fix calls.
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [{ role: 'user', content: trimmed }],
+    })
+    const content = resp.content
+      .map((b) => (b.type === 'text' ? b.text : ''))
+      .join('')
+      .trim()
+    if (!content || /^null$/i.test(content)) return null
+    const m = content.match(/(\d{3,5})/)
+    if (!m) return null
+    const n = parseInt(m[1], 10)
+    if (!Number.isFinite(n) || n < 200 || n > 50_000) return null
+    return n
+  } catch (err) {
+    console.warn(`[apify] haikuPriceExtract failed: ${(err as Error).message}`)
+    return null
+  }
+}
+
+/**
+ * Run a Haiku price-fill pass over a list of listings whose `price_monthly`
+ * is null. Mutates each listing in place. Bounded by `cap` so a 400-listing
+ * batch with 200 nulls doesn't blow the Anthropic budget; we'd rather miss
+ * a tail of nulls than spend $$$ on a single Apify run.
+ *
+ * `p-limit` keeps concurrency tight (4 in flight) so we don't hit the
+ * Anthropic rate limit on a tight scrape loop.
+ */
+async function fillPriceWithHaiku(
+  items: NewListing[],
+  cap = 25,
+): Promise<{ filled: number; attempted: number }> {
+  if (!process.env.ANTHROPIC_API_KEY) return { filled: 0, attempted: 0 }
+  const candidates = items
+    .filter((l) => l.price_monthly == null)
+    .filter((l) => {
+      // Need *some* prose to look at — title alone is rarely enough.
+      const desc = (l.description ?? '').trim()
+      const title = (l.title ?? '').trim()
+      return desc.length >= 30 || /\$\s*\d/.test(title)
+    })
+    .slice(0, cap)
+
+  if (candidates.length === 0) return { filled: 0, attempted: 0 }
+
+  const limit = pLimit(4)
+  let filled = 0
+  await Promise.all(
+    candidates.map((l) =>
+      limit(async () => {
+        const text = [l.title, l.description].filter(Boolean).join('\n\n')
+        const n = await haikuPriceExtract(text)
+        if (n != null) {
+          l.price_monthly = n
+          filled += 1
+        }
+      }),
+    ),
+  )
+  return { filled, attempted: candidates.length }
 }
 
 function asDate(v: unknown): Date | null {
@@ -376,8 +618,10 @@ function mapZillow(item: ZillowItem, v: Variant): NewListing | null {
     item.url ??
     (item.zpid ? `https://www.zillow.com/homedetails/${item.zpid}_zpid/` : null)
   if (!url) return null
-  const photos = asPhotoArray(item.imageUrls)
-  if (photos.length === 0 && item.imageUrl) photos.push(item.imageUrl)
+  // Pull every photo URL the actor exposes. Zillow's various forks emit
+  // photos under at least 6 different keys (`imageUrls`, `responsivePhotos`,
+  // `photos`, `media`, etc.) — collectZillowPhotos walks them all.
+  const photos = collectZillowPhotos(item as unknown as Record<string, unknown>)
   const petFriendly =
     typeof item.petPolicy === 'string'
       ? /(allowed|cats|dogs|yes|ok|friendly)/i.test(item.petPolicy) &&
@@ -385,12 +629,20 @@ function mapZillow(item: ZillowItem, v: Variant): NewListing | null {
       : null
   const unitTitle = [item.buildingName, item.unitNumber].filter(Boolean).join(' #')
 
+  // Multi-field price extraction. Zillow forks scatter the rent across at
+  // least 8 keys plus nested `units[].price` and string `priceLabel`. After
+  // this pass, listings still missing a price drop into the Haiku fallback
+  // applied at the run() level.
+  const priceFromFields = extractPriceFromAnyField(
+    item as unknown as Record<string, unknown>,
+  )
+
   return {
     source: 'zillow',
     source_url: url,
     title: unitTitle || item.address || 'Zillow listing',
     description: item.description ?? null,
-    price_monthly: asNumber(item.price) ?? item.rentZestimate ?? null,
+    price_monthly: priceFromFields ?? item.rentZestimate ?? null,
     beds: item.bedrooms != null ? item.bedrooms.toString() : null,
     baths: item.bathrooms != null ? item.bathrooms.toString() : null,
     sqft: item.livingArea ?? null,
@@ -447,7 +699,22 @@ export async function runZillowSearchNYC(): Promise<NewListing[]> {
     )
     for (const arr of got) results.push(...arr)
   }
-  return dedupeByUrl(results)
+  const deduped = dedupeByUrl(results)
+
+  // Haiku price-fill pass. Audit found that 18/33 cool-area Zillow rows came
+  // back with `price_monthly = null` because the actor scattered rent across
+  // varying field names. After multi-field extraction the residual nulls
+  // usually have rent text in `description` or `title`; Haiku finds it.
+  // Capped at 25 calls per sweep to bound spend.
+  const beforeNulls = deduped.filter((l) => l.price_monthly == null).length
+  if (beforeNulls > 0) {
+    const { filled, attempted } = await fillPriceWithHaiku(deduped, 25)
+    console.log(
+      `[apify:zillow] price-fill: ${filled}/${attempted} filled via haiku (was ${beforeNulls} nulls)`,
+    )
+  }
+
+  return deduped
 }
 
 // =================================================================================
@@ -495,14 +762,22 @@ function streetEasySearchUrl(v: Variant): string {
 
 function mapStreetEasy(item: StreetEasyItem, v: Variant): NewListing | null {
   if (!item.url) return null
-  const photos: string[] = []
-  if (item.image_url && /^https?:\/\//.test(item.image_url)) photos.push(item.image_url)
+  // StreetEasy's actor returns a thin item but forks add varying photo arrays
+  // (`image_urls`, `photos`, `images`). Pull from all of them.
+  const photoSet = new Set<string>()
+  if (item.image_url && /^https?:\/\//.test(item.image_url)) photoSet.add(item.image_url)
+  const itemAsRec = item as unknown as Record<string, unknown>
+  for (const key of ['image_urls', 'photos', 'images', 'gallery'] as const) {
+    for (const u of asPhotoArray(itemAsRec[key])) photoSet.add(u)
+  }
+  const photos = [...photoSet]
   return {
     source: 'streeteasy',
     source_url: item.url,
     title: item.address ?? item.property_type ?? 'StreetEasy listing',
     description: null,
-    price_monthly: asNumber(item.price),
+    price_monthly:
+      asNumber(item.price) ?? extractPriceFromAnyField(itemAsRec) ?? null,
     beds:
       typeof item.beds === 'number'
         ? item.beds.toString()
@@ -557,7 +832,9 @@ export async function runStreeteasySearchNYC(): Promise<NewListing[]> {
     )
     for (const arr of got) results.push(...arr)
   }
-  return dedupeByUrl(results)
+  const deduped = dedupeByUrl(results)
+  await fillPriceWithHaiku(deduped, 15)
+  return deduped
 }
 
 // =================================================================================
@@ -716,23 +993,33 @@ function mapApartments(item: ApartmentsItem, v: Variant): NewListing | null {
       })()
     : undefined
 
+  // Multi-field price chain: structured fields first, then deep fallback.
   const price =
-    typeof item.rentMin === 'number'
-      ? item.rentMin
-      : typeof item.rentMax === 'number'
-        ? item.rentMax
-        : asNumber(item.rent)
+    (typeof item.rentMin === 'number' ? item.rentMin : null) ??
+    (typeof item.rentMax === 'number' ? item.rentMax : null) ??
+    asNumber(item.rent) ??
+    extractPriceFromAnyField(item as unknown as Record<string, unknown>)
 
   const amenities = Array.isArray(item.amenities)
     ? (item.amenities.filter((a) => typeof a === 'string') as string[])
     : []
+
+  // Pull every photo field — the actor's main key is `images[]`, but forks
+  // also emit `photos[]`, `floorPlans[].image`, `gallery[]`.
+  const photoSet = new Set<string>()
+  for (const u of asPhotoArray(item.images)) photoSet.add(u)
+  const itemAsRec = item as unknown as Record<string, unknown>
+  for (const key of ['photos', 'gallery', 'media', 'photoUrls'] as const) {
+    for (const u of asPhotoArray(itemAsRec[key])) photoSet.add(u)
+  }
+  const photos = [...photoSet]
 
   return {
     source: 'apartments',
     source_url: item.url,
     title: item.name ?? item.address ?? 'Apartments.com listing',
     description: item.description ?? null,
-    price_monthly: price,
+    price_monthly: price ?? null,
     beds:
       typeof item.beds === 'number'
         ? item.beds.toString()
@@ -750,7 +1037,7 @@ function mapApartments(item: ApartmentsItem, v: Variant): NewListing | null {
             !/no\s+(pets|cats|dogs)/i.test(item.petPolicy)
           : null,
     amenities,
-    photos: asPhotoArray(item.images),
+    photos,
     address: item.address ?? null,
     neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: v.borough ?? item.city ?? null,
@@ -806,9 +1093,11 @@ export async function runApartmentsSearchNYC(): Promise<NewListing[]> {
   // The actor returns items without telling us which location-variant each
   // belongs to, so we annotate with a synthesized "all" variant.
   const allVariant: Variant = { label: `apartments:batch(${locations.length})` }
-  return dedupeByUrl(
+  const deduped = dedupeByUrl(
     items.map((it) => mapApartments(it, allVariant)).filter((l): l is NewListing => l != null),
   )
+  await fillPriceWithHaiku(deduped, 15)
+  return deduped
 }
 
 // =================================================================================
@@ -874,8 +1163,18 @@ function realtorLocation(v: Variant): string {
 
 function mapRealtor(item: RealtorItem, v: Variant): NewListing | null {
   if (!item.url) return null
-  const photos = asPhotoArray(item.images)
-  if (photos.length === 0 && item.primaryImage) photos.push(item.primaryImage)
+  // Aggregate every photo field. Realtor's actors emit images/`photos`/
+  // `media`, plus singletons `primaryImage` / `mainImage`.
+  const photoSet = new Set<string>()
+  for (const u of asPhotoArray(item.images)) photoSet.add(u)
+  const itemAsRec = item as unknown as Record<string, unknown>
+  for (const key of ['photos', 'media', 'gallery', 'photoUrls'] as const) {
+    for (const u of asPhotoArray(itemAsRec[key])) photoSet.add(u)
+  }
+  if (item.primaryImage && /^https?:\/\//.test(item.primaryImage)) {
+    photoSet.add(item.primaryImage)
+  }
+  const photos = [...photoSet]
   const nbhd =
     typeof item.neighborhood === 'string'
       ? item.neighborhood
@@ -887,7 +1186,11 @@ function mapRealtor(item: RealtorItem, v: Variant): NewListing | null {
     source_url: item.url,
     title: address ?? 'Realtor.com listing',
     description: item.description ?? null,
-    price_monthly: asNumber(item.price) ?? asNumber(item.priceFormatted),
+    price_monthly:
+      asNumber(item.price) ??
+      asNumber(item.priceFormatted) ??
+      extractPriceFromAnyField(itemAsRec) ??
+      null,
     beds: item.beds != null ? item.beds.toString() : null,
     baths: item.baths != null ? item.baths.toString() : null,
     sqft: item.sqft ?? null,
@@ -942,9 +1245,11 @@ export async function runRealtorSearchNYC(): Promise<NewListing[]> {
   })
 
   const allVariant: Variant = { label: `realtor:batch(${locations.length})` }
-  return dedupeByUrl(
+  const deduped = dedupeByUrl(
     items.map((it) => mapRealtor(it, allVariant)).filter((l): l is NewListing => l != null),
   )
+  await fillPriceWithHaiku(deduped, 15)
+  return deduped
 }
 
 // =================================================================================
@@ -1356,4 +1661,208 @@ export async function runTwitterSearchNYC(): Promise<NewListing[]> {
  */
 export function activeBudgetMode(): BudgetMode {
   return budgetMode()
+}
+
+// =================================================================================
+// Targeted (per preferred-area) runners — used by /api/refresh
+// =================================================================================
+// The cron path runs the full borough sweep ("nyc-all" + 4 boroughs + variants).
+// The manual Refresh button has a 60s budget — too tight for a full sweep — but
+// the user is most interested in their preferred neighborhoods. These runners
+// fan out one search per `preferred_areas` entry (capped at 4) so the user
+// gets fresh Zillow / StreetEasy / Apartments / Realtor results for the
+// SPECIFIC neighborhoods they care about, not just NYC-wide.
+//
+// Each runner:
+//   - takes a list of preferred-area strings
+//   - returns [] if APIFY_TOKEN is missing
+//   - applies a tight per-actor wall budget so a single slow actor can't
+//     starve the others (caller still races with an outer Promise.race
+//     against a global timeout)
+//   - applies the same Haiku price-fill pass as the cron-path runners
+
+/**
+ * Build per-area variants. Up to N areas (default 4 — the most-preferred
+ * neighborhoods across the joint profile set).
+ */
+function variantsForAreas(
+  areas: string[],
+  budgetMax: number | null,
+  cap = 4,
+): Variant[] {
+  const out: Variant[] = []
+  for (const a of areas.slice(0, cap)) {
+    if (!a || a.includes('FILL_ME')) continue
+    out.push({
+      label: `targeted:${slugify(a)}`,
+      neighborhood: a,
+      budgetMax,
+    })
+  }
+  // Fall back to a single NYC-wide variant if the user has no preferred_areas
+  // set yet — better to scrape something than nothing.
+  if (out.length === 0) {
+    out.push({ label: 'targeted:nyc-all', budgetMax })
+  }
+  return out
+}
+
+/**
+ * Targeted Zillow runner. ONE listingUrl per area, parallel-2.
+ * Per-actor wall budget kept low (90s each) so a slow actor doesn't burn the
+ * caller's whole 60s window — the outer caller races against a global timeout.
+ */
+export async function runZillowTargetedAreas(
+  areas: string[],
+  budgetMax: number | null = null,
+): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
+  const variants = variantsForAreas(areas, budgetMax)
+  const results: NewListing[] = []
+  let i = 0
+  while (i < variants.length) {
+    const slice = variants.slice(i, i + 2)
+    i += 2
+    const got = await Promise.all(
+      slice.map(async (v) => {
+        const url = zillowSearchUrl(v)
+        const items = await runApifyActor<ZillowItem>(
+          ZILLOW_ACTOR,
+          {
+            listingUrl: url,
+            maxItems: 50,
+            proxyConfig: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
+          },
+          { timeoutMs: 90_000 },
+        )
+        return items
+          .map((it) => mapZillow(it, v))
+          .filter((l): l is NewListing => l != null)
+      }),
+    )
+    for (const arr of got) results.push(...arr)
+  }
+  const deduped = dedupeByUrl(results)
+  await fillPriceWithHaiku(deduped, 15)
+  return deduped
+}
+
+export async function runStreeteasyTargetedAreas(
+  areas: string[],
+  budgetMax: number | null = null,
+): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
+  const variants = variantsForAreas(areas, budgetMax)
+  const results: NewListing[] = []
+  let i = 0
+  while (i < variants.length) {
+    const slice = variants.slice(i, i + 2)
+    i += 2
+    const got = await Promise.all(
+      slice.map(async (v) => {
+        const url = streetEasySearchUrl(v)
+        const items = await runApifyActor<StreetEasyItem>(
+          STREETEASY_ACTOR,
+          {
+            start_url: url,
+            listing_type: 'for-rent',
+            results_wanted: 30,
+            max_pages: 3,
+            proxyConfiguration: {
+              useApifyProxy: true,
+              apifyProxyGroups: ['RESIDENTIAL'],
+            },
+          },
+          { timeoutMs: 90_000 },
+        )
+        return items
+          .map((it) => mapStreetEasy(it, v))
+          .filter((l): l is NewListing => l != null)
+      }),
+    )
+    for (const arr of got) results.push(...arr)
+  }
+  const deduped = dedupeByUrl(results)
+  await fillPriceWithHaiku(deduped, 10)
+  return deduped
+}
+
+/**
+ * Apartments.com runner takes a `locations[]` array. We pass per-area slugs
+ * directly so the actor batches them in ONE run — cheaper than per-area runs.
+ */
+export async function runApartmentsTargetedAreas(
+  areas: string[],
+  budgetMax: number | null = null,
+): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
+  const variants = variantsForAreas(areas, budgetMax)
+  const locations = Array.from(new Set(variants.map(apartmentsLocation)))
+  const items = await runApifyActor<ApartmentsItem>(
+    APARTMENTS_ACTOR,
+    {
+      locations,
+      minRent: 0,
+      maxRent: budgetMax ?? 0,
+      beds: 0,
+      baths: 0,
+      petFriendly: false,
+      maxResults: Math.min(120, locations.length * 30),
+      proxyConfiguration: { useApifyProxy: true },
+    },
+    { timeoutMs: 90_000 },
+  )
+  const allVariant: Variant = { label: `apartments:targeted(${locations.length})` }
+  const deduped = dedupeByUrl(
+    items.map((it) => mapApartments(it, allVariant)).filter((l): l is NewListing => l != null),
+  )
+  await fillPriceWithHaiku(deduped, 10)
+  return deduped
+}
+
+/**
+ * Realtor.com runner — same batching pattern as Apartments. The Realtor
+ * locations format ("New-York_NY" or "City_ST") doesn't have a great
+ * neighborhood-level slug, so we map preferred areas to the umbrella city +
+ * boroughs and let the actor's per-result neighborhood field do the
+ * post-filter (we leave that to the consumer / scoring stage).
+ */
+export async function runRealtorTargetedAreas(
+  areas: string[],
+  budgetMax: number | null = null,
+): Promise<NewListing[]> {
+  const t = token()
+  if (!t) return []
+  // For Realtor we use the borough mapping when we can detect one; else NYC.
+  const locations = new Set<string>()
+  const boroughHints = ['Brooklyn', 'Manhattan', 'Queens', 'Bronx', 'Staten Island']
+  for (const a of areas.slice(0, 4)) {
+    const matched = boroughHints.find((b) => a.toLowerCase().includes(b.toLowerCase()))
+    locations.add(matched ? `${matched.replace(/\s+/g, '-')}_NY` : 'New-York_NY')
+  }
+  if (locations.size === 0) locations.add('New-York_NY')
+  const items = await runApifyActor<RealtorItem>(
+    REALTOR_ACTOR,
+    {
+      locations: [...locations],
+      propertyType: 'any',
+      minPrice: 0,
+      maxPrice: budgetMax ?? 0,
+      minBeds: 0,
+      minBaths: 0,
+      status: 'for_rent',
+      maxResults: Math.min(200, locations.size * 60),
+      proxyConfiguration: { useApifyProxy: true },
+    },
+    { timeoutMs: 90_000 },
+  )
+  const allVariant: Variant = { label: `realtor:targeted(${locations.size})` }
+  const deduped = dedupeByUrl(
+    items.map((it) => mapRealtor(it, allVariant)).filter((l): l is NewListing => l != null),
+  )
+  await fillPriceWithHaiku(deduped, 10)
+  return deduped
 }

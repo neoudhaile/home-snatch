@@ -73,6 +73,35 @@ function emptyBySource(): Record<Source, SourceMetric> {
 // ---------- main entry ----------
 
 /**
+ * Returns a fully-zeroed DqMetrics shape so callers (and the admin UI) can
+ * still render when any DB query fails. Mirrors the success-path shape so
+ * downstream `m.by_source[s].active` lookups never blow up on missing keys.
+ */
+function emptyDqMetrics(): DqMetrics {
+  return {
+    total_active: 0,
+    total_inactive: 0,
+    by_source: emptyBySource(),
+    coverage_gaps: {
+      no_photos: 0,
+      no_contact: 0,
+      no_address: 0,
+      no_posted_at: 0,
+      no_lat_lng: 0,
+    },
+    freshness: { fresh: 0, stale: 0, old: 0 },
+    duplicate_clusters: 0,
+    last_scrape_run: null,
+    score_health: {
+      total_scored: 0,
+      avg_score: 0,
+      median_score: 0,
+      score_buckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
+    },
+  }
+}
+
+/**
  * Compute every dashboard metric. Optimized to 3 round trips:
  *   1. one big CTE-based listings query: per-source counts + coverage gaps +
  *      freshness buckets + last_scrape MAX (combined into a single result set
@@ -82,14 +111,23 @@ function emptyBySource(): Record<Source, SourceMetric> {
  *   3. one query for score_health
  *   plus duplicate_clusters from `countDuplicateClusters()` (1 query).
  *
- * Net: 4 round trips, was 7.
+ * Each individual query is wrapped in its own try/catch — historical /admin
+ * 500s came from one of these throwing on a schema-rename or empty DB. With
+ * per-query catch blocks the dashboard renders the partial state and the
+ * caller sees zeroed values for the failed metric, not a blank page.
  *
  * Wrapped in `unstable_cache` (60s TTL, tag `dq`) — admin doesn't need
  * second-by-second freshness; `revalidateTag('dq')` on scrape complete keeps
  * the user-perceived snapshot tight.
  */
 async function _computeDqMetrics(): Promise<DqMetrics> {
-  const db = getDb()
+  let db: ReturnType<typeof getDb>
+  try {
+    db = getDb()
+  } catch (err) {
+    console.warn(`[data-quality] getDb failed: ${(err as Error).message}`)
+    return emptyDqMetrics()
+  }
 
   // ---------- 1. Combined listings stats (per-source + gaps + freshness + last-fetch) ----------
   type SourceRow = {
@@ -162,7 +200,9 @@ async function _computeDqMetrics(): Promise<DqMetrics> {
   }
   type CombinedRow = SourceRow | GapRow | FreshRow | LastRow
 
-  const combined = (await db.execute<CombinedRow>(sql`
+  let combined: CombinedRow[] = []
+  try {
+    combined = (await db.execute<CombinedRow>(sql`
     SELECT 'source'::text AS kind, source, NULL::text AS active, NULL::text AS inactive,
            NULL::text AS last_24h, NULL::text AS last_7d,
            NULL::text AS no_photos, NULL::text AS no_contact, NULL::text AS no_address,
@@ -208,6 +248,15 @@ async function _computeDqMetrics(): Promise<DqMetrics> {
            MAX(fetched_at)::text
       FROM listings
   `)) as unknown as CombinedRow[]
+  } catch (err) {
+    // Most likely cause of /admin 500 historically: this SQL throws when the
+    // listings table is empty or has had a column dropped/renamed by a
+    // post-productize migration. Log + degrade rather than crash the page.
+    console.warn(
+      `[data-quality] combined listings query failed: ${(err as Error).message}`,
+    )
+    combined = []
+  }
 
   const by_source = emptyBySource()
   let total_active = 0
@@ -254,29 +303,43 @@ async function _computeDqMetrics(): Promise<DqMetrics> {
   }
 
   // ---------- 2. duplicate clusters + last-scrape per-source + score_health (parallel) ----------
-  const duplicateClustersP = countDuplicateClusters()
+  const duplicateClustersP = countDuplicateClusters().catch((err) => {
+    console.warn(
+      `[data-quality] countDuplicateClusters failed: ${(err as Error).message}`,
+    )
+    return 0
+  })
 
   const lastScrapeP: Promise<DqMetrics['last_scrape_run']> = lastAtRaw
     ? (async () => {
-        const at = new Date(lastAtRaw!)
-        const runRows = (await db.execute<{ source: string; n: string }>(sql`
-          SELECT source, COUNT(*)::text AS n
-          FROM listings
-          WHERE fetched_at >= ${at.toISOString()}::timestamptz - interval '60 seconds'
-            AND fetched_at <= ${at.toISOString()}::timestamptz + interval '60 seconds'
-          GROUP BY source
-        `)) as unknown as Array<{ source: string; n: string }>
-        const bs: Partial<Record<Source, number>> = {}
-        let ingested = 0
-        for (const r of runRows) {
-          bs[r.source as Source] = Number(r.n)
-          ingested += Number(r.n)
+        try {
+          const at = new Date(lastAtRaw!)
+          if (Number.isNaN(at.getTime())) return null
+          const runRows = (await db.execute<{ source: string; n: string }>(sql`
+            SELECT source, COUNT(*)::text AS n
+            FROM listings
+            WHERE fetched_at >= ${at.toISOString()}::timestamptz - interval '60 seconds'
+              AND fetched_at <= ${at.toISOString()}::timestamptz + interval '60 seconds'
+            GROUP BY source
+          `)) as unknown as Array<{ source: string; n: string }>
+          const bs: Partial<Record<Source, number>> = {}
+          let ingested = 0
+          for (const r of runRows) {
+            bs[r.source as Source] = Number(r.n)
+            ingested += Number(r.n)
+          }
+          return { at, ingested, by_source: bs }
+        } catch (err) {
+          console.warn(
+            `[data-quality] last-scrape per-source failed: ${(err as Error).message}`,
+          )
+          return null
         }
-        return { at, ingested, by_source: bs }
       })()
     : Promise.resolve(null)
 
   const scoreHealthP = (async () => {
+    try {
     const [scoreAgg] = (await db.execute<{
       total: string
       avg: string | null
@@ -319,6 +382,17 @@ async function _computeDqMetrics(): Promise<DqMetrics> {
         '80-100': Number(scoreAgg?.b5 ?? 0),
       },
     }
+    } catch (err) {
+      console.warn(
+        `[data-quality] score_health aggregation failed: ${(err as Error).message}`,
+      )
+      return {
+        total_scored: 0,
+        avg_score: 0,
+        median_score: 0,
+        score_buckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
+      }
+    }
   })()
 
   const [duplicate_clusters, last_scrape_run, score_health] = await Promise.all([
@@ -343,8 +417,22 @@ async function _computeDqMetrics(): Promise<DqMetrics> {
  * 60-second cached wrapper. Tagged `dq`; invalidate via `revalidateTag('dq')`
  * after a scrape/refresh/rescore so the dashboard reflects fresh state without
  * waiting for the TTL.
+ *
+ * Wrapped in a top-level try/catch so the /admin page never 500s on a
+ * data-quality error — partial dashboards beat a blank server-error page.
  */
-export const getDqMetrics = unstable_cache(_computeDqMetrics, ['dq-metrics-v1'], {
+async function _computeDqMetricsSafe(): Promise<DqMetrics> {
+  try {
+    return await _computeDqMetrics()
+  } catch (err) {
+    console.warn(
+      `[data-quality] _computeDqMetrics threw at top level: ${(err as Error).message}`,
+    )
+    return emptyDqMetrics()
+  }
+}
+
+export const getDqMetrics = unstable_cache(_computeDqMetricsSafe, ['dq-metrics-v1'], {
   revalidate: 60,
   tags: ['dq'],
 })

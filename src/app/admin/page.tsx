@@ -13,6 +13,7 @@
  */
 import { Suspense } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { AlertTriangle } from 'lucide-react'
 import { ActionButton } from '@/components/admin/action-button'
 import { CoverageBars, FreshnessBar } from '@/components/admin/coverage-bars'
 import { DqCard } from '@/components/admin/dq-card'
@@ -113,7 +114,30 @@ export default function AdminPage() {
 }
 
 async function Dashboard() {
-  const m = await getDqMetrics()
+  // Per-panel error containment: if getDqMetrics throws, render an inline
+  // error card. getDqMetrics is itself wrapped in `_computeDqMetricsSafe`
+  // and should always resolve to an empty-shape result, but keep the catch
+  // as a guard against future regressions in the cached-wrapper path.
+  let m: Awaited<ReturnType<typeof getDqMetrics>>
+  try {
+    m = await getDqMetrics()
+  } catch (err) {
+    return (
+      <section className="rounded-xl border border-border bg-card px-4 py-4 ring-1 ring-foreground/5">
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warm-fg" />
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium text-foreground">
+              data-quality dashboard unavailable
+            </div>
+            <div className="mt-0.5 break-all text-[12px] text-muted-foreground">
+              {(err as Error).message ?? 'unknown error'}
+            </div>
+          </div>
+        </div>
+      </section>
+    )
+  }
   const sourcesActive = (Object.keys(m.by_source) as Array<keyof typeof m.by_source>).filter(
     (s) => m.by_source[s].active > 0
   ).length

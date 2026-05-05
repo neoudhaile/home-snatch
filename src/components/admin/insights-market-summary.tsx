@@ -5,14 +5,48 @@
  * is shown as a compact strip below so the user can verify against the LLM
  * prose.
  */
-import { Sparkles } from 'lucide-react'
+import { Sparkles, AlertTriangle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { generateMarketSummary } from '@/lib/insights'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
+/** Inline-error card shown when a single panel fails to load. */
+function InsightsErrorCard({ label, message }: { label: string; message: string }) {
+  return (
+    <section className="rounded-2xl border border-border bg-card px-5 py-4 ring-1 ring-foreground/5">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warm-fg" />
+        <div className="min-w-0">
+          <div className="text-[12px] font-medium text-foreground">
+            {label} unavailable
+          </div>
+          <div className="mt-0.5 break-all text-[12px] text-muted-foreground">
+            {message}
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export async function InsightsMarketSummary() {
-  const m = await generateMarketSummary()
+  // Per-panel error containment: if generateMarketSummary throws, render a
+  // small inline error card instead of letting the whole /admin page 500.
+  // The function itself is supposed to fall back to deterministic copy on
+  // any internal error, so reaching this catch is rare — but keep it as a
+  // belt-and-suspenders guard.
+  let m: Awaited<ReturnType<typeof generateMarketSummary>>
+  try {
+    m = await generateMarketSummary()
+  } catch (err) {
+    return (
+      <InsightsErrorCard
+        label="market summary"
+        message={(err as Error).message ?? 'unknown error'}
+      />
+    )
+  }
   const stats = m.raw_stats
   const topBoroughs = stats.by_borough.slice(0, 3)
 
