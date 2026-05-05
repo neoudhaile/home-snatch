@@ -510,7 +510,7 @@ export async function getRankedFeedWithCounts(
       LIMIT 1
     ) s ON true
     WHERE l.is_active = true
-      AND l.posted_at >= ${cutoff}
+      AND (l.posted_at >= ${cutoff} OR l.posted_at IS NULL)
       ${sourceFilter}
       ${neighborhoodFilter}
     ORDER BY l.posted_at DESC
@@ -524,7 +524,7 @@ export async function getRankedFeedWithCounts(
     SELECT l.neighborhood AS neighborhood, count(*)::int AS n
     FROM listings l
     WHERE l.is_active = true
-      AND l.posted_at >= ${cutoff}
+      AND (l.posted_at >= ${cutoff} OR l.posted_at IS NULL)
       ${sourceFilter}
     GROUP BY l.neighborhood
   `) as unknown as Promise<CountRow[]>
