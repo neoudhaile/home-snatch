@@ -17,9 +17,9 @@ export const DEFAULT_HEADERS: Record<string, string> = {
   Connection: 'keep-alive',
 }
 
-/** Per-host last-request timestamps so we can throttle ≥3s. */
+/** Per-host last-request timestamps so we can throttle ≥1.5s. */
 const lastRequestAt = new Map<string, number>()
-const HOST_THROTTLE_MS = 3_000
+const HOST_THROTTLE_MS = 1_500
 
 function hostOf(url: string): string {
   try {

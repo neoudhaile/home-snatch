@@ -12,6 +12,7 @@
  */
 
 import { sql } from 'drizzle-orm'
+import { revalidateTag } from 'next/cache'
 import { fetchAllSources } from '@/scrapers'
 import { getDb } from '@/lib/db'
 import { listings } from '@/db/schema'
@@ -85,6 +86,14 @@ export async function GET(req: Request) {
     .set({ is_active: false })
     .where(sql`${listings.is_active} = true AND ${listings.last_seen_at} < now() - interval '30 days'`)
     .returning({ id: listings.id })
+
+  // Bust the feed + dq caches so the next render reflects the upsert.
+  try {
+    revalidateTag('feed', 'max')
+    revalidateTag('dq', 'max')
+  } catch {
+    /* revalidateTag throws outside a request scope — ignore in dev/test */
+  }
 
   return Response.json({
     ingested,

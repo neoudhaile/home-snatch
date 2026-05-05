@@ -23,6 +23,10 @@ import {
 } from '@/scrapers/apify'
 import { browserlessConfigured, fetchViaBrowserless } from '@/scrapers/browserless'
 import { logScrapeError, throttledFetch } from '@/scrapers/_util'
+import {
+  getCachedExtraction,
+  setCachedExtraction,
+} from '@/lib/extraction-cache'
 
 const EXTRACT_TOOL: Anthropic.Tool = {
   name: 'emit_listing',
@@ -176,8 +180,16 @@ export function sourceFromUrl(url: string): Source {
 export async function extractListingFromHTML(
   url: string,
   html: string,
-  opts: { hint?: string } = {}
+  opts: { hint?: string; bypassCache?: boolean } = {}
 ): Promise<NewListing | null> {
+  // Cache hit short-circuits the Haiku call entirely. 7-day TTL inside
+  // `getCachedExtraction`. Skip if caller explicitly opts out (e.g. forced
+  // refresh from /admin).
+  if (!opts.bypassCache) {
+    const cached = await getCachedExtraction(url)
+    if (cached) return cached
+  }
+
   const anthropic = getAnthropic()
   const userText = [
     `URL: ${url}`,
@@ -255,7 +267,7 @@ export async function extractListingFromHTML(
     (v) => v != null && (Array.isArray(v) ? v.length > 0 : true)
   )
 
-  return {
+  const out: NewListing = {
     source: sourceFromUrl(url),
     source_url: url,
     title: fields.title,
@@ -283,6 +295,11 @@ export async function extractListingFromHTML(
     is_active: true,
     raw: { extractor: 'haiku-4.5', source_url: url },
   }
+
+  // Fire-and-forget cache write — never block the response on it.
+  void setCachedExtraction(url, out)
+
+  return out
 }
 
 /** True if the host likely blocks direct fetch (CDN-fronted real-estate sites). */

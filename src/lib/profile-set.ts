@@ -113,47 +113,41 @@ export function hashProfileSet(profiles: ProfileFile[]): string {
  * that are filled in. Files containing FILL_ME for any required field are
  * dropped with a console.warn — we never mix half-filled profiles into the
  * joint constraints, that path leads to silent garbage.
+ *
+ * Reuses the cached output of `loadAllProfileFiles` (60s TTL) and filters
+ * for ready profiles in-process. Saves the FS round trips on every score
+ * batch + every chat call.
  */
 export async function loadProfilesFromJson(
   profilesDir = join(process.cwd(), 'src', 'profiles')
 ): Promise<ProfileFile[]> {
-  let files: string[]
-  try {
-    files = await readdir(profilesDir)
-  } catch (err) {
-    console.warn(`[profile-set] could not read ${profilesDir}: ${(err as Error).message}`)
-    return []
-  }
-
+  const all = await loadAllProfileFiles(profilesDir)
   const out: ProfileFile[] = []
-  for (const file of files.filter((f) => f.endsWith('.json'))) {
-    const path = join(profilesDir, file)
-    try {
-      const raw = await readFile(path, 'utf8')
-      const parsed = profileFileSchema.parse(JSON.parse(raw))
-      if (!isProfileReady(parsed)) {
-        console.warn(`[profile-set] skipping ${file}: still has FILL_ME or missing budget_max`)
-        continue
-      }
-      out.push(parsed)
-    } catch (err) {
-      console.warn(`[profile-set] failed to parse ${file}: ${(err as Error).message}`)
+  for (const parsed of all) {
+    if (!isProfileReady(parsed)) {
+      // We log once per stale-cache-cycle on the underlying loader; staying
+      // quiet here so we don't spam the console on the cached path.
+      continue
     }
+    out.push(parsed)
   }
   return out
 }
 
+// In-memory cache of parsed profile files keyed by directory. Profiles are
+// edited via the JSON-files-as-config workflow — they change at most a few
+// times during a session. A 60s TTL eliminates the FS reads from every page
+// render / API call while still picking up edits within ~1 min. Not using
+// `unstable_cache` because Next's data cache doesn't share state with raw
+// Node FS reads cleanly across HMR boundaries in dev.
+type ProfileCacheEntry = { at: number; data: ProfileFile[] }
+const _profileFileCache = new Map<string, ProfileCacheEntry>()
+const PROFILE_CACHE_TTL_MS = 60_000
+
 /**
- * Read every JSON file under src/profiles/, validate, and return the parsed
- * profiles regardless of whether they're "ready" (FILL_ME tolerated). This is
- * the canonical list of *known* profile slugs/names — the one referenced by
- * the saver/UI surface so a half-filled profile still shows up as a saver.
- *
- * Server-side only; uses fs.
+ * Internal: bypass the cache. Used only by the cached wrapper below.
  */
-export async function loadAllProfileFiles(
-  profilesDir = join(process.cwd(), 'src', 'profiles')
-): Promise<ProfileFile[]> {
+async function _loadAllProfileFilesUncached(profilesDir: string): Promise<ProfileFile[]> {
   let files: string[]
   try {
     files = await readdir(profilesDir)
@@ -176,6 +170,34 @@ export async function loadAllProfileFiles(
   // Sort alphabetically by slug for deterministic ordering across the app.
   out.sort((a, b) => a.slug.localeCompare(b.slug))
   return out
+}
+
+/**
+ * Read every JSON file under src/profiles/, validate, and return the parsed
+ * profiles regardless of whether they're "ready" (FILL_ME tolerated). This is
+ * the canonical list of *known* profile slugs/names — the one referenced by
+ * the saver/UI surface so a half-filled profile still shows up as a saver.
+ *
+ * Server-side only; uses fs. Cached in-process for 60 seconds.
+ */
+export async function loadAllProfileFiles(
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<ProfileFile[]> {
+  const now = Date.now()
+  const hit = _profileFileCache.get(profilesDir)
+  if (hit && now - hit.at < PROFILE_CACHE_TTL_MS) return hit.data
+  const data = await _loadAllProfileFilesUncached(profilesDir)
+  _profileFileCache.set(profilesDir, { at: now, data })
+  return data
+}
+
+/**
+ * Force-reload profiles from disk on next call. Useful when you've just
+ * written a profile file and want subsequent reads to see it without the
+ * 60-second wait.
+ */
+export function clearProfileFileCache(): void {
+  _profileFileCache.clear()
 }
 
 /**

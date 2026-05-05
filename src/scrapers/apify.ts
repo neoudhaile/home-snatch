@@ -55,9 +55,7 @@
 
 import type { NewListing } from '@/types'
 import { loadAllProfileFiles, type ProfileFile } from '@/lib/profile-set'
-import { logScrapeError } from './_util'
-
-const APIFY_BASE = 'https://api.apify.com/v2'
+import { runApifyActorAsync } from '@/lib/apify-async'
 
 function token(): string | null {
   return process.env.APIFY_TOKEN ?? null
@@ -181,7 +179,14 @@ async function buildVariants(): Promise<Variant[]> {
 // ---- Generic actor runner ----
 
 /**
- * Run a sync actor call and pull the dataset items. Caps at 5 minutes.
+ * Run an Apify actor and return the dataset items.
+ *
+ * Implementation: uses the async pattern (start run → poll status → fetch
+ * dataset items) under the hood via `runApifyActorAsync`, with a 240s default
+ * timeout and best-effort run cancel on timeout. Used to be sync via
+ * `run-sync-get-dataset-items` but that blocked the lambda for the full
+ * actor wall-time, leaving zero headroom under Vercel Pro's 300s ceiling.
+ *
  * Returns [] when no token is configured or the actor fails.
  */
 export async function runApifyActor<T = unknown>(
@@ -195,28 +200,7 @@ export async function runApifyActor<T = unknown>(
     console.warn(`[apify] APIFY_TOKEN missing — skipping ${actorId}`)
     return []
   }
-
-  const url = `${APIFY_BASE}/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${t}`
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 5 * 60_000)
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-      signal: ctrl.signal,
-    })
-    if (!res.ok) {
-      throw new Error(`Apify ${actorId} HTTP ${res.status}: ${await res.text().catch(() => '')}`)
-    }
-    const data = (await res.json()) as T[]
-    return Array.isArray(data) ? data : []
-  } catch (err) {
-    logScrapeError(`apify:${actorId}`, url, err)
-    return []
-  } finally {
-    clearTimeout(timer)
-  }
+  return runApifyActorAsync<T>(actorId, input, opts)
 }
 
 // ---- helpers shared across extractors ----

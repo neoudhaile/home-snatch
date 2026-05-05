@@ -148,6 +148,40 @@ export const rent_stabilized_buildings = pgTable('rent_stabilized_buildings', {
   units: integer('units'),
 })
 
+/**
+ * Cache of Reddit-post Haiku classifications, keyed by `post_id` (the Reddit
+ * `t3_*` id without the prefix — same id we already use as the dedupe key in
+ * `reddit.ts`). Entries older than 24h should be ignored at read-time; we
+ * don't TTL-delete here, the reader filters by `cached_at`.
+ *
+ * Why a table and not in-memory: cron runs land on cold lambdas regularly, an
+ * in-memory Map would have ~0% hit rate across runs. With this table we get
+ * >50% hit rate after the first pass since most Reddit posts in /new repeat
+ * across the 1-hour cron cadence.
+ */
+export const reddit_classifications = pgTable('reddit_classifications', {
+  post_id: text('post_id').primaryKey(),
+  classification: jsonb('classification').notNull(),
+  cached_at: timestamp('cached_at').defaultNow().notNull(),
+})
+
+/**
+ * Cache of full extraction results from `extractListingFromHTML`, keyed by
+ * SHA-1 of the URL (cheap to compute, fixed-length, avoids URL-as-PK weirdness
+ * with very long Apify-generated URLs). Entries older than 7 days are ignored
+ * at read-time.
+ *
+ * Skipped for the structured-extractor scrapers (Apify, Reddit) since they
+ * already produce structured output; only `extractListingFromHTML` (HTML →
+ * NewListing via Haiku) flows through this cache.
+ */
+export const extraction_cache = pgTable('extraction_cache', {
+  url_hash: text('url_hash').primaryKey(),
+  source_url: text('source_url').notNull(),
+  raw_listing: jsonb('raw_listing').notNull(),
+  cached_at: timestamp('cached_at').defaultNow().notNull(),
+})
+
 export const saved_listings = pgTable(
   'saved_listings',
   {

@@ -93,7 +93,9 @@ Formatting:
 Behavior:
 - When the user asks about apartments, USE TOOLS first. Don't guess. Call list_listings or get_saved or compare_listings to get fresh data.
 - Use live_search when the user asks for something the DB might not cover yet — a specific niche neighborhood + amenity combo, very-just-posted listings ("posted in the last hour", "today only"), or when list_listings returns 0 results for a real-sounding query. Don't use it for routine "show me top 5" queries — list_listings is cached and instant; live_search costs creds and 10–60 seconds.
-- When citing a listing, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities) alongside the citation link.
+- You have a live \`web_search\` tool. Use it when the user asks for fresh listings the DB hasn't ingested yet, or for one-off questions about NYC neighborhoods (subway changes, crime news, restaurant openings — things that change). Prefer \`list_listings\` for ranked, scored search; use \`web_search\` for everything else.
+- When citing web search results, format URLs as standard markdown links. Don't pretend search results are scored listings — only items in the DB get scores. Web-search hits don't carry a UUID, so don't emit them with the \`listing:UUID\` scheme.
+- When citing a listing from the DB, mention its score and 2-3 specific facts (price, neighborhood, commute, amenities) alongside the citation link.
 - Be concise: 1-3 sentences per response unless explicitly asked for more, OR when a table / list is the clearer answer.
 - When the user wants to save/unsave, just do it via the tool, don't ask permission.
 - When drafting outreach emails, keep them under 80 words. Always include: greeting, who's asking (use the buyer names from the header above), why this listing in particular (cite a fact), suggested viewing windows, sign-off.
@@ -120,8 +122,80 @@ async function buildBuyerHeader(): Promise<string> {
  * is enough — no code change required — and validate the slug after the model
  * picks one (`isValidSaver`).
  */
+/**
+ * NYC location config for the built-in web_search tool. Anthropic uses this to
+ * bias search results toward Manhattan/NYC-relevant content (subway lines,
+ * neighborhood news, etc.) when the user asks about, say, "what's posted this
+ * week in Bushwick".
+ */
+const WEB_SEARCH_USER_LOCATION: Anthropic.UserLocation = {
+  type: 'approximate',
+  city: 'New York',
+  region: 'New York',
+  country: 'US',
+  timezone: 'America/New_York',
+}
+
+/**
+ * Allow-list for the built-in web_search tool. We deliberately don't include
+ * Zillow/StreetEasy/Trulia in the broadest allow-list because their HTML is
+ * useless to the model behind their CDN walls — we want listing-aggregator
+ * results (Reddit, Listings Project, Craigslist, plus the open metadata sites
+ * Apartments/Realtor/Redfin which DO render server-side enough for search
+ * snippets). This list is conservative; remove entirely if the model gets
+ * over-constrained.
+ */
+const WEB_SEARCH_ALLOWED_DOMAINS = [
+  'streeteasy.com',
+  'zillow.com',
+  'craigslist.org',
+  'reddit.com',
+  'listingsproject.com',
+  'apartments.com',
+  'realtor.com',
+  'redfin.com',
+  'hotpads.com',
+  'renthop.com',
+  'trulia.com',
+  'nytimes.com',
+  'thecity.nyc',
+  'gothamist.com',
+  'mta.info',
+  'ny.curbed.com',
+  'brickunderground.com',
+]
+
+/**
+ * Built-in `web_search` server-side tool. Anthropic runs the search itself
+ * and returns results to the model directly — no tool-runner logic needed on
+ * our side. This is MUCH faster than `live_search` (which fans out to Apify)
+ * for casual "what's posted today" queries.
+ *
+ * Tool version: `web_search_20260209` (current as of 2026-05-04 per the
+ * Anthropic SDK type defs in node_modules/@anthropic-ai/sdk; supersedes the
+ * earlier `web_search_20250305`). Both are in the SDK's `ToolUnion`. If
+ * Anthropic deprecates 20260209, swap to whatever the SDK exposes.
+ *
+ * max_uses=5 keeps any single chat turn from blowing up creds on chained
+ * searches.
+ */
+const WEB_SEARCH_TOOL: Anthropic.WebSearchTool20260209 = {
+  type: 'web_search_20260209',
+  name: 'web_search',
+  max_uses: 5,
+  allowed_domains: WEB_SEARCH_ALLOWED_DOMAINS,
+  user_location: WEB_SEARCH_USER_LOCATION,
+}
+
+/**
+ * Tools array passed to `client.messages.stream`. It's a mix of user-defined
+ * tools (`Anthropic.Tool`) and Anthropic's server-side tools
+ * (`WebSearchTool20260209` etc.) — the SDK's `ToolUnion` covers both.
+ */
+type ChatTool = Anthropic.ToolUnion
+
 async function buildTools(): Promise<{
-  tools: Anthropic.Tool[]
+  tools: ChatTool[]
   saverSlugs: string[]
   jointSummaryHint: string
 }> {
@@ -135,7 +209,7 @@ async function buildTools(): Promise<{
       ? 'Return the merged joint profile. (No profiles configured.)'
       : `Return the merged ${joinProfileNames(profiles.map((p) => p.name))} joint profile (budget, beds, must-haves, deal-breakers, preferred areas, vibes, commute targets). Use to ground recommendations.`
 
-  const tools: Anthropic.Tool[] = [
+  const userTools: Anthropic.Tool[] = [
     {
       name: 'list_listings',
       description:
@@ -296,6 +370,11 @@ async function buildTools(): Promise<{
       },
     },
   ]
+
+  // Append the built-in `web_search` server-side tool last. Anthropic runs it
+  // on their infra and feeds results back to the model directly — we don't
+  // implement a runner for it (see `runTool` switch — it never hits there).
+  const tools: ChatTool[] = [...userTools, WEB_SEARCH_TOOL]
 
   return { tools, saverSlugs, jointSummaryHint }
 }

@@ -14,6 +14,7 @@
  */
 import { z } from 'zod'
 import { and, eq, isNull, sql } from 'drizzle-orm'
+import { revalidateTag } from 'next/cache'
 import { listings, scores, subway_stations } from '@/db/schema'
 import { getDb } from '@/lib/db'
 import { getDqMetrics } from '@/lib/data-quality'
@@ -63,17 +64,45 @@ export async function POST(req: Request) {
     return Response.json({ error: 'bad_request', message: msg }, { status: 400 })
   }
 
+  // After any state-changing action, bust feed + dq caches so subsequent
+  // reads reflect the new data.
+  const bust = () => {
+    try {
+      revalidateTag('feed', 'max')
+      revalidateTag('dq', 'max')
+    } catch {
+      /* outside request scope */
+    }
+  }
+
   switch (body.action) {
-    case 'dedupe':
-      return Response.json(await markDuplicates())
-    case 'scrape':
-      return Response.json(await runScrape())
-    case 'refresh':
-      return Response.json(await refreshStaleListings())
-    case 'rescore':
-      return Response.json(await runRescore())
+    case 'dedupe': {
+      const r = await markDuplicates()
+      bust()
+      return Response.json(r)
+    }
+    case 'scrape': {
+      const r = await runScrape()
+      bust()
+      return Response.json(r)
+    }
+    case 'refresh': {
+      const r = await refreshStaleListings()
+      bust()
+      return Response.json(r)
+    }
+    case 'rescore': {
+      const r = await runRescore()
+      bust()
+      return Response.json(r)
+    }
     case 'recompute-vibes':
       await computeNeighborhoodVibes()
+      try {
+        revalidateTag('vibes', 'max')
+      } catch {
+        /* outside request scope */
+      }
       return Response.json({ ok: true })
     default:
       return Response.json({ error: 'unknown_action' }, { status: 400 })

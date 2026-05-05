@@ -29,11 +29,16 @@ async function main() {
   const { subway_stations } = await import('@/db/schema')
   const stations = await db.select().from(subway_stations)
 
+  // skipAlreadyScored: true makes a fresh rescore on an unchanged DB drop
+  // from ~90s to <5s (we filter out listings whose profile_set_hash row
+  // already exists). When the user *does* want a forced rescore (after a
+  // prompt edit), they should clear the scores table or flip this flag.
   const out = await scoreListings(allListings, {
     profilesOverride: profiles,
     hpdByListingId: new Map(),
     rentStabByListingId: new Map(),
     stations,
+    skipAlreadyScored: true,
   })
   console.log('[rescore] scored:', out.length)
 

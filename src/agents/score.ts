@@ -14,6 +14,7 @@
 
 import pLimit from 'p-limit'
 import { differenceInDays } from 'date-fns'
+import { and, eq, inArray } from 'drizzle-orm'
 import type {
   Listing,
   NewScore,
@@ -33,6 +34,8 @@ import { prematchListing } from '@/lib/profile-match'
 import { commuteEstimate, nearestStation } from '@/lib/subway'
 import { getVibeForLatLng } from '@/lib/nyc-vibes'
 import { geocodeNeighborhood } from '@/lib/geocode'
+import { getDb } from '@/lib/db'
+import { scores as scoresTable } from '@/db/schema'
 
 // ---------- types ----------
 
@@ -436,8 +439,19 @@ export type ScoreListingsOptions = {
   rentStabByListingId: Map<string, boolean>
   /** Concurrency for enrichment (DB + geocode). Default 5. */
   enrichmentConcurrency?: number
-  /** Concurrency for Anthropic calls. Default 3. */
+  /**
+   * Concurrency for Anthropic calls. Default 5 on Vercel Pro (was 3 on
+   * hobby tier) — Anthropic API tolerates the bump fine, the bottleneck is
+   * Haiku/Sonnet wall-time per listing.
+   */
   scoreConcurrency?: number
+  /**
+   * If true, listings that already have a score row for the current
+   * profile_set_hash are filtered out before scoring. Used by the rescore
+   * cron path: a clean rescore on an unchanged DB drops from ~90s to <5s.
+   * Default false (full rescore).
+   */
+  skipAlreadyScored?: boolean
 }
 
 /**
@@ -462,9 +476,42 @@ export async function scoreListings(
   const profileSetHash = hashProfileSet(profiles)
   console.log(`[score] profile set hash=${profileSetHash}, ${profiles.length} profile(s) loaded`)
 
+  // ---- Fast-path: skip listings already scored against this profile_set_hash
+  // The cron rescore otherwise wastes ~80% of its budget rescoring unchanged
+  // rows. Drops a fresh-DB-no-changes pass from ~90s to <5s.
+  let candidates = listings
+  if (options.skipAlreadyScored && listings.length > 0) {
+    try {
+      const db = getDb()
+      const existing = await db
+        .select({ listing_id: scoresTable.listing_id })
+        .from(scoresTable)
+        .where(
+          and(
+            eq(scoresTable.profile_set_hash, profileSetHash),
+            inArray(
+              scoresTable.listing_id,
+              listings.map((l) => l.id),
+            ),
+          ),
+        )
+      const have = new Set(existing.map((r) => r.listing_id))
+      const before = candidates.length
+      candidates = candidates.filter((l) => !have.has(l.id))
+      console.log(
+        `[score] skipAlreadyScored: ${have.size}/${before} already scored, scoring ${candidates.length} new`,
+      )
+    } catch (err) {
+      console.warn(
+        '[score] skipAlreadyScored lookup failed, falling back to full rescore:',
+        (err as Error).message,
+      )
+    }
+  }
+
   // 1. prematch
   const survivors: Listing[] = []
-  for (const listing of listings) {
+  for (const listing of candidates) {
     const pm = prematchListing(listing, joint)
     if (pm.decision === 'fail') {
       console.log(`[score] prematch fail: ${listing.id} — ${pm.reasons.join('; ')}`)
@@ -489,8 +536,8 @@ export async function scoreListings(
     )
   )
 
-  // 3. score (concurrent, lower limit for Anthropic)
-  const scoreLimit = pLimit(options.scoreConcurrency ?? 3)
+  // 3. score (concurrent — bumped to 5 on Pro tier; was 3)
+  const scoreLimit = pLimit(options.scoreConcurrency ?? 5)
   const scores = await Promise.all(
     survivors.map((listing, i) =>
       scoreLimit(async () => {

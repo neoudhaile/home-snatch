@@ -16,6 +16,7 @@
  */
 
 import { sql } from 'drizzle-orm'
+import { revalidateTag } from 'next/cache'
 import type { NewListing, Source } from '@/types'
 import { listings as listingsTable } from '@/db/schema'
 import { getDb } from '@/lib/db'
@@ -119,6 +120,14 @@ export async function POST() {
       })
       .returning({ id: listingsTable.id })
     ingested += rows.length
+  }
+
+  // Bust the feed + dq caches so the next render reflects the upsert.
+  try {
+    revalidateTag('feed', 'max')
+    revalidateTag('dq', 'max')
+  } catch {
+    /* outside request scope — ignore */
   }
 
   return Response.json({

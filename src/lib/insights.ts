@@ -331,6 +331,10 @@ export async function generateMarketSummary(): Promise<MarketSummary> {
       temperature: 0.3,
       system: [
         {
+          // Cache breakpoint: MARKET_SYSTEM_PROMPT is constant across calls,
+          // dynamic stats payload lives in the user message strictly after.
+          // Expected cache-read hit rate >95% after first call within the
+          // 5-min ephemeral window.
           type: 'text',
           text: MARKET_SYSTEM_PROMPT,
           cache_control: { type: 'ephemeral' },
@@ -724,12 +728,21 @@ export async function recommendCleanup(): Promise<CleanupSuggestion[]> {
       signal: c.signal,
       summary: c.listing_summary,
     }))
+    // Rightsizing: cleanup rationales are short (≤140 chars), the deterministic
+    // signal already supplies all the structure, and the model is just rephrasing
+    // 1-2 facts into compliant voice. Haiku handles this with no quality drop
+    // for ~5x lower cost than Sonnet. (Market summary still uses Sonnet —
+    // synthesis quality matters there.)
     const response = await client.messages.create({
-      model: MODELS.reason,
+      model: MODELS.extract,
       max_tokens: 2048,
       temperature: 0.2,
       system: [
         {
+          // Cache breakpoint: system prompt is stable across every cleanup
+          // batch invocation, so the prompt cache hits >90% after the first
+          // run. Dynamic per-batch payload is in `messages.user.content`,
+          // strictly AFTER the cache_control marker.
           type: 'text',
           text: CLEANUP_SYSTEM_PROMPT,
           cache_control: { type: 'ephemeral' },

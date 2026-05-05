@@ -85,14 +85,15 @@ const SOURCES: Array<{ name: Source; label: string; fn: SourceFn }> = [
 ]
 
 /**
- * Fetch every source in parallel (cap=2 concurrent so we don't slam Apify or
- * burn through Anthropic creds), dedupe by `source_url`, return combined.
+ * Fetch every source in parallel (cap=5 concurrent on Vercel Pro — sources are
+ * mostly independent and Pro has the memory headroom; was 2 on hobby tier),
+ * dedupe by `source_url`, return combined.
  *
  * `bySource` totals merge cross-tier rows (so direct + Apify hotpads roll up
  * into one `hotpads` count).
  */
 export async function fetchAllSources(): Promise<FetchAllResult> {
-  const limit = pLimit(2)
+  const limit = pLimit(5)
   const settled = await Promise.allSettled(
     SOURCES.map(({ name, label, fn }) =>
       limit(async () => {

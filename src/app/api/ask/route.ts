@@ -156,10 +156,14 @@ export async function POST(req: Request) {
         model: MODELS.reason,
         max_tokens: 600,
         temperature: 0.3,
-        // Two-part system: a short, dynamic buyer header (NOT cached, so changes
-        // when profiles change) + the cached bulk of the prompt. Anthropic's
-        // prompt cache keys on prefix-equality, so we put the dynamic part first
-        // and the cache_control marker on the long, stable part.
+        // ⚠ Cache breakpoint audit (2026-05): the dynamic buyerHeader sits
+        // BEFORE the cached system block, which means any profile-name change
+        // forces a full re-cache. That's fine — it's tiny (~30 chars) and
+        // changes only when a new profile JSON is added/renamed. Once the
+        // dynamic header stabilizes, every subsequent /api/ask call hits the
+        // cache. Cache_control on the long bulk → expected hit rate >90%.
+        // Per-listing dynamic facts live in messages[0].content (user role),
+        // strictly after the cache breakpoint as required by the API.
         system: [
           { type: 'text', text: buyerHeader },
           {

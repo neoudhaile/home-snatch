@@ -33,6 +33,10 @@ import pLimit from 'p-limit'
 import { getAnthropic, MODELS } from '@/lib/anthropic'
 import type { NewListing } from '@/types'
 import {
+  getCachedClassifications,
+  upsertClassifications,
+} from '@/lib/reddit-cache'
+import {
   extractEmail,
   extractImageUrls,
   extractPhone,
@@ -302,8 +306,8 @@ function looksLikeNoise(post: RedditPost): boolean {
 
 export async function fetchReddit(): Promise<NewListing[]> {
   // Fetch every sub in parallel — `throttledFetch` already gates per-host so
-  // they sequence naturally on `reddit.com` (~3s between requests, well under
-  // Reddit's ~60/min anonymous JSON cap).
+  // they sequence naturally on `reddit.com` (~1.5s between requests, well
+  // under Reddit's ~60/min anonymous JSON cap).
   const all = (await Promise.all(SUBS.map((s) => fetchSubreddit(s)))).flat()
 
   // Dedupe across subs by post id (cross-posts show up in multiple subs).
@@ -314,17 +318,47 @@ export async function fetchReddit(): Promise<NewListing[]> {
   }
   const candidates = [...byId.values()].filter((p) => !looksLikeNoise(p))
 
+  // ---- Classification-cache pre-fetch -----------------------------------
+  // Pull existing classifications in ONE query, skip Haiku for hits, classify
+  // only the misses. ~80% of /new posts repeat across cron runs so this drops
+  // the Anthropic spend per scrape pass dramatically once the cache is warm.
+  const candidateIds = candidates.map((p) => p.id).filter(Boolean)
+  const cached = await getCachedClassifications<Classification>(candidateIds)
+  const hits = candidates.filter((p) => cached.has(p.id))
+  const misses = candidates.filter((p) => !cached.has(p.id))
+  console.log(
+    `[reddit] cache: ${hits.length} hit / ${misses.length} miss / ${candidates.length} candidates`,
+  )
+
   // Cap concurrent Haiku classification calls to keep Anthropic spend bounded.
   const limit = pLimit(4)
+  const newlyClassified: Array<{ post_id: string; classification: Classification }> = []
+
   const settled = await Promise.allSettled(
     candidates.map((post) =>
       limit(async () => {
-        const cls = await classifyPost(post)
+        let cls: Classification | null
+        const cachedCls = cached.get(post.id)
+        if (cachedCls) {
+          cls = cachedCls
+        } else {
+          cls = await classifyPost(post)
+          if (cls) {
+            // Defer the upsert to one batch insert at the end so we don't
+            // open N connections.
+            newlyClassified.push({ post_id: post.id, classification: cls })
+          }
+        }
         if (!cls || !cls.is_offer) return null
         return buildListing(post, cls)
       }),
     ),
   )
+
+  // Single batch insert of all newly-classified posts.
+  if (newlyClassified.length > 0) {
+    await upsertClassifications(newlyClassified)
+  }
 
   const out: NewListing[] = []
   for (const r of settled) {

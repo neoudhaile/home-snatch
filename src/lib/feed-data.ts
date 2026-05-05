@@ -1,5 +1,6 @@
 import type { RankedListing, Source } from '@/types'
 import * as real from '@/lib/listing-helpers'
+import { unstable_cache } from 'next/cache'
 
 /**
  * Feed data — real-DB first, mock fallback.
@@ -1069,13 +1070,31 @@ function applyExtendedFilters(rows: RankedListing[], opts: FeedFilters): RankedL
   return out
 }
 
+/**
+ * Cached real-feed fetch. Keyed on (freshnessDays, sources) since those are
+ * the only inputs that affect the underlying SQL. Extended filters (keywords,
+ * priceMin, etc.) are applied in JS after this returns, so the same cached
+ * payload backs every search variant within the TTL.
+ *
+ * Tag: `feed`. Invalidate via `revalidateTag('feed')` after a scrape/refresh
+ * upsert so the dashboard reflects fresh listings without waiting for the
+ * 60-second TTL.
+ */
+const _cachedRealFeed = unstable_cache(
+  async (freshnessDays: number | undefined, sources: Source[] | undefined) => {
+    return real.getRankedFeed({
+      freshness_days: freshnessDays,
+      sources,
+    })
+  },
+  ['ranked-feed-v1'],
+  { revalidate: 60, tags: ['feed'] },
+)
+
 export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListing[]> {
   if (process.env.DATABASE_URL) {
     try {
-      const rows = await real.getRankedFeed({
-        freshness_days: opts.freshnessDays,
-        sources: opts.sources,
-      })
+      const rows = await _cachedRealFeed(opts.freshnessDays, opts.sources)
       if (rows.length > 0) return applyExtendedFilters(rows, opts)
       // Empty DB → fall through to mocks so design-time isn't a blank page.
     } catch (err) {

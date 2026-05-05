@@ -15,7 +15,7 @@
  * incoming `saved_by` values against `isValidSaver()` before we land here.
  */
 
-import { eq, and, inArray, desc } from 'drizzle-orm'
+import { eq, and, inArray, desc, sql } from 'drizzle-orm'
 import { listings, scores, neighborhood_vibes, saved_listings } from '@/db/schema'
 import type { RankedListing } from '@/types'
 import { getRankedFeed, getListing } from '@/lib/feed-data'
@@ -134,73 +134,205 @@ async function loadRankedByIds(ids: string[]): Promise<RankedListing[]> {
 
 /**
  * All listings saved by a given saver, most-recently-saved first.
+ *
+ * Optimization: a single round-trip JOIN of `saved_listings` → `listings` →
+ * `scores` → `neighborhood_vibes`. Previously this was 2 round trips (ids
+ * lookup, then `loadRankedByIds`).
  */
 export async function getSavedFor(saver: Saver): Promise<RankedListing[]> {
-  const ordered = await tryDb(
-    async () => {
-      const { getDb } = await import('@/lib/db')
-      const db = getDb()
-      const rows = await db
-        .select({ listing_id: saved_listings.listing_id, saved_at: saved_listings.saved_at })
-        .from(saved_listings)
-        .where(eq(saved_listings.saved_by, saver))
-        .orderBy(desc(saved_listings.saved_at))
-      return rows.map((r) => r.listing_id)
-    },
-    () => {
-      const store = getMockStore()
-      return store
-        .filter((e) => e.saved_by === saver)
-        .sort((a, b) => b.saved_at.getTime() - a.saved_at.getTime())
-        .map((e) => e.listing_id)
-    },
-  )
-  return loadRankedByIds(ordered)
+  if (!hasDb()) {
+    const store = getMockStore()
+    const ids = store
+      .filter((e) => e.saved_by === saver)
+      .sort((a, b) => b.saved_at.getTime() - a.saved_at.getTime())
+      .map((e) => e.listing_id)
+    return loadRankedByIds(ids)
+  }
+  try {
+    const { getDb } = await import('@/lib/db')
+    const db = getDb()
+    const rows = await db
+      .select({
+        listing: listings,
+        score: scores,
+        vibe: neighborhood_vibes,
+        saved_at: saved_listings.saved_at,
+      })
+      .from(saved_listings)
+      .innerJoin(listings, eq(listings.id, saved_listings.listing_id))
+      .leftJoin(scores, eq(scores.listing_id, listings.id))
+      .leftJoin(neighborhood_vibes, eq(neighborhood_vibes.borough, listings.borough))
+      .where(eq(saved_listings.saved_by, saver))
+      .orderBy(desc(saved_listings.saved_at))
+
+    // Same listing may appear multiple times if multiple scores joined; pick
+    // the latest score per listing while preserving saved_at-desc order.
+    const seen = new Set<string>()
+    const out: RankedListing[] = []
+    for (const r of rows) {
+      if (!r.score) continue
+      if (seen.has(r.listing.id)) continue
+      seen.add(r.listing.id)
+      out.push({
+        ...r.listing,
+        score: r.score,
+        vibe: r.vibe ?? null,
+      } as RankedListing)
+    }
+    return out
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[save-state] getSavedFor DB failed, falling back:', (err as Error).message)
+    }
+    const store = getMockStore()
+    const ids = store
+      .filter((e) => e.saved_by === saver)
+      .sort((a, b) => b.saved_at.getTime() - a.saved_at.getTime())
+      .map((e) => e.listing_id)
+    return loadRankedByIds(ids)
+  }
 }
 
 /**
  * Listings ALL known savers have saved. Sorted by joint score DESC. This is
  * the decision-relevant headline of /saved.
+ *
+ * Optimization: single round trip (CTE-style aggregate) when DB is available.
+ * Was 2 round trips: ids GROUP BY HAVING + ranked-by-ids JOIN.
  */
 export async function getSavedIntersection(): Promise<RankedListing[]> {
   const knownSavers = await getKnownSavers()
   const knownSet = new Set(knownSavers)
 
-  const sharedIds = await tryDb(
-    async () => {
-      const { getDb } = await import('@/lib/db')
-      const db = getDb()
-      const rows = await db
-        .select({ listing_id: saved_listings.listing_id, saved_by: saved_listings.saved_by })
-        .from(saved_listings)
-      const bySaver = new Map<string, Set<Saver>>()
-      for (const r of rows) {
-        if (!knownSet.has(r.saved_by)) continue
-        const set = bySaver.get(r.listing_id) ?? new Set<Saver>()
-        set.add(r.saved_by)
-        bySaver.set(r.listing_id, set)
-      }
-      return [...bySaver.entries()]
-        .filter(([, savers]) => savers.size === knownSavers.length && knownSavers.length > 0)
-        .map(([id]) => id)
-    },
-    () => {
-      const store = getMockStore()
-      const bySaver = new Map<string, Set<Saver>>()
-      for (const e of store) {
-        if (!knownSet.has(e.saved_by)) continue
-        const set = bySaver.get(e.listing_id) ?? new Set<Saver>()
-        set.add(e.saved_by)
-        bySaver.set(e.listing_id, set)
-      }
-      return [...bySaver.entries()]
-        .filter(([, savers]) => savers.size === knownSavers.length && knownSavers.length > 0)
-        .map(([id]) => id)
-    },
-  )
-  const ranked = await loadRankedByIds(sharedIds)
-  ranked.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0))
-  return ranked
+  if (knownSavers.length === 0) return []
+
+  if (!hasDb()) {
+    const store = getMockStore()
+    const bySaver = new Map<string, Set<Saver>>()
+    for (const e of store) {
+      if (!knownSet.has(e.saved_by)) continue
+      const set = bySaver.get(e.listing_id) ?? new Set<Saver>()
+      set.add(e.saved_by)
+      bySaver.set(e.listing_id, set)
+    }
+    const sharedIds = [...bySaver.entries()]
+      .filter(([, s]) => s.size === knownSavers.length && knownSavers.length > 0)
+      .map(([id]) => id)
+    const ranked = await loadRankedByIds(sharedIds)
+    ranked.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0))
+    return ranked
+  }
+
+  try {
+    const { getDb } = await import('@/lib/db')
+    const db = getDb()
+    // One query: the aggregate filter + the listings/scores/vibes join. The
+    // INNER JOIN to a sub-aggregate yields just the shared-saver listings.
+    const rows = await db.execute<{
+      l_id: string
+      l_source: string
+      l_source_url: string
+      l_title: string
+      l_price_monthly: number | null
+      l_borough: string | null
+      l_neighborhood: string | null
+      l_posted_at: string | null
+      score_score: number | null
+    }>(sql`
+      WITH shared AS (
+        SELECT listing_id
+        FROM saved_listings
+        WHERE saved_by = ANY (${knownSavers}::text[])
+        GROUP BY listing_id
+        HAVING COUNT(DISTINCT saved_by) = ${knownSavers.length}
+      ),
+      latest_score AS (
+        SELECT DISTINCT ON (listing_id) listing_id, profile_set_hash, score, headline,
+               concerns, rationale_jsonb, computed_at
+        FROM scores
+        WHERE listing_id IN (SELECT listing_id FROM shared)
+        ORDER BY listing_id, computed_at DESC
+      )
+      SELECT l.*,
+             ls.profile_set_hash AS s_profile_set_hash,
+             ls.score             AS s_score,
+             ls.headline          AS s_headline,
+             ls.concerns          AS s_concerns,
+             ls.rationale_jsonb   AS s_rationale_jsonb,
+             ls.computed_at       AS s_computed_at,
+             nv.nta_code, nv.nta_name, nv.borough AS v_borough, nv.noise, nv.walkability,
+             nv.greenness, nv.nightlife, nv.cafes, nv.family_score, nv.computed_at AS v_computed_at,
+             nv.geom_geojson, nv.centroid_lat, nv.centroid_lng
+      FROM listings l
+      INNER JOIN shared sh ON sh.listing_id = l.id
+      LEFT JOIN latest_score ls ON ls.listing_id = l.id
+      LEFT JOIN neighborhood_vibes nv ON nv.borough = l.borough
+      ORDER BY ls.score DESC NULLS LAST
+    `) as unknown as Array<Record<string, unknown>>
+
+    const out: RankedListing[] = []
+    const seen = new Set<string>()
+    for (const r of rows) {
+      const id = r.id as string
+      if (seen.has(id)) continue
+      if (r.s_score == null) continue
+      seen.add(id)
+      // Reconstruct Listing fields from raw row.
+      const listing = r as unknown as RankedListing
+      out.push({
+        ...listing,
+        score: {
+          listing_id: id,
+          profile_set_hash: (r.s_profile_set_hash as string) ?? '',
+          score: r.s_score as number,
+          headline: r.s_headline as string,
+          concerns: r.s_concerns as string | null,
+          rationale_jsonb: r.s_rationale_jsonb,
+          computed_at: r.s_computed_at instanceof Date
+            ? (r.s_computed_at as Date)
+            : new Date(r.s_computed_at as string),
+        },
+        vibe: r.nta_code
+          ? {
+              nta_code: r.nta_code as string,
+              nta_name: r.nta_name as string,
+              borough: (r.v_borough as string) ?? '',
+              noise: r.noise as number | null,
+              walkability: r.walkability as number | null,
+              greenness: r.greenness as number | null,
+              nightlife: r.nightlife as number | null,
+              cafes: r.cafes as number | null,
+              family_score: r.family_score as number | null,
+              computed_at: r.v_computed_at instanceof Date
+                ? (r.v_computed_at as Date)
+                : new Date(r.v_computed_at as string),
+              geom_geojson: r.geom_geojson,
+              centroid_lat: r.centroid_lat as number | null,
+              centroid_lng: r.centroid_lng as number | null,
+            }
+          : null,
+      } as unknown as RankedListing)
+    }
+    return out
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[save-state] getSavedIntersection DB failed, falling back:', (err as Error).message)
+    }
+    const store = getMockStore()
+    const bySaver = new Map<string, Set<Saver>>()
+    for (const e of store) {
+      if (!knownSet.has(e.saved_by)) continue
+      const set = bySaver.get(e.listing_id) ?? new Set<Saver>()
+      set.add(e.saved_by)
+      bySaver.set(e.listing_id, set)
+    }
+    const sharedIds = [...bySaver.entries()]
+      .filter(([, s]) => s.size === knownSavers.length && knownSavers.length > 0)
+      .map(([id]) => id)
+    const ranked = await loadRankedByIds(sharedIds)
+    ranked.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0))
+    return ranked
+  }
 }
 
 /**

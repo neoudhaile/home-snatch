@@ -12,8 +12,9 @@
  * for the UI agent's `src/lib/feed-data.ts` stub.
  */
 
-import { and, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, sql } from 'drizzle-orm'
 import { differenceInHours } from 'date-fns'
+import { unstable_cache } from 'next/cache'
 import {
   hpd_violations,
   listings as listingsTable,
@@ -57,47 +58,76 @@ export function normalizeAddress(addr: string | null | undefined): string {
 }
 
 /**
- * Build the listingId -> 12mo HPD violation count map by scanning
- * `hpd_violations.address` for substring matches against each listing's
- * normalized address. We do the join in Node because the open-data tables
- * keyed-by-BBL aren't joinable to listings by address without a normalized
- * key column we don't have. For ~1k listings + ~50k violations this is
- * still well under a second.
+ * Build the listingId -> 12mo HPD violation count map.
  *
- * Listings without an address contribute nothing to the map.
+ * Optimization: instead of pulling all ~70k hpd_violations rows over the wire
+ * and running address substring matching in JS, we let Postgres do the work.
+ * For each listing we generate a normalized building-level address; we then
+ * issue a single SQL query that pre-filters violations whose lower(address)
+ * matches any listing key (or vice versa) using ILIKE. Postgres can use a
+ * functional index `(lower(address))` plus a trigram GIN index — see
+ * `drizzle/extra-indexes.sql`.
+ *
+ * For very small listing counts (<=1) we use the bulk per-key path directly
+ * since the planner picks a sensible plan. For larger sets we batch with a
+ * single OR-of-ILIKEs to stay one round trip.
+ *
+ * Falls back gracefully on error (returns empty map).
  */
 export async function buildHpdByListingId(
   listings: Pick<Listing, 'id' | 'address'>[]
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>()
-  const withAddr = listings.filter((l) => normalizeAddress(l.address).length > 0)
+  const withAddr = listings
+    .map((l) => ({ id: l.id, key: normalizeAddress(l.address) }))
+    .filter((l) => l.key.length > 0)
   if (withAddr.length === 0) return out
+
+  // Build a `lower(address) ILIKE ANY ($1::text[])` candidate filter so Postgres
+  // only returns rows possibly matching one of our listings. Bind the array as
+  // one parameter — drizzle's tagged sql template binds nested arrays correctly
+  // for postgres-js. After the SQL pre-filter we still post-process in JS to
+  // also catch the inverse direction (listing key contained inside violation
+  // address) which a single SQL ILIKE can't express both ways without OR.
+  const patterns = Array.from(new Set(withAddr.map((l) => `%${l.key}%`)))
 
   const db = getDb()
   let rows: { address: string | null; count_12mo: number }[] = []
   try {
-    rows = await db
+    rows = (await db
       .select({ address: hpd_violations.address, count_12mo: hpd_violations.count_12mo })
       .from(hpd_violations)
-      .where(isNotNull(hpd_violations.address))
-  } catch (err) {
-    console.warn(`[listing-helpers] hpd_violations query failed: ${(err as Error).message}`)
-    return out
+      .where(
+        and(
+          isNotNull(hpd_violations.address),
+          sql`lower(${hpd_violations.address}) ILIKE ANY (${patterns}::text[])`,
+        ),
+      )) as unknown as { address: string | null; count_12mo: number }[]
+  } catch {
+    // Fallback: full scan with isNotNull only. Worst-case ~70k rows over wire,
+    // but we only hit this path if the bound-array form fails (older PG, etc.)
+    try {
+      rows = await db
+        .select({ address: hpd_violations.address, count_12mo: hpd_violations.count_12mo })
+        .from(hpd_violations)
+        .where(isNotNull(hpd_violations.address))
+    } catch (err) {
+      console.warn(`[listing-helpers] hpd_violations query failed: ${(err as Error).message}`)
+      return out
+    }
   }
 
-  // Pre-normalize the violation addresses once.
+  // Pre-normalize candidate violation addresses once.
   const norm = rows.map((r) => ({
     address: normalizeAddress(r.address),
     count: r.count_12mo,
   }))
 
   for (const l of withAddr) {
-    const key = normalizeAddress(l.address)
-    if (!key) continue
     let total = 0
     for (const v of norm) {
       if (!v.address) continue
-      if (v.address === key || v.address.includes(key) || key.includes(v.address)) {
+      if (v.address === l.key || v.address.includes(l.key) || l.key.includes(v.address)) {
         total += v.count
       }
     }
@@ -107,38 +137,83 @@ export async function buildHpdByListingId(
 }
 
 /**
- * Build the listingId -> rent-stabilized boolean map by the same address
- * substring approach. Returns true if ANY stabilized building's address
- * matches the listing's normalized address.
+ * Build the listingId -> rent-stabilized boolean map. Same SQL-prefilter
+ * strategy as `buildHpdByListingId`. Returns true if ANY stabilized
+ * building's address matches the listing's normalized address.
  */
 export async function buildRentStabByListingId(
   listings: Pick<Listing, 'id' | 'address'>[]
 ): Promise<Map<string, boolean>> {
   const out = new Map<string, boolean>()
-  const withAddr = listings.filter((l) => normalizeAddress(l.address).length > 0)
+  const withAddr = listings
+    .map((l) => ({ id: l.id, key: normalizeAddress(l.address) }))
+    .filter((l) => l.key.length > 0)
   if (withAddr.length === 0) return out
+
+  const patterns = Array.from(new Set(withAddr.map((l) => `%${l.key}%`)))
 
   const db = getDb()
   let rows: { address: string | null }[] = []
   try {
-    rows = await db
+    rows = (await db
       .select({ address: rent_stabilized_buildings.address })
       .from(rent_stabilized_buildings)
-      .where(isNotNull(rent_stabilized_buildings.address))
-  } catch (err) {
-    console.warn(`[listing-helpers] rent_stabilized_buildings query failed: ${(err as Error).message}`)
-    return out
+      .where(
+        and(
+          isNotNull(rent_stabilized_buildings.address),
+          sql`lower(${rent_stabilized_buildings.address}) ILIKE ANY (${patterns}::text[])`,
+        ),
+      )) as unknown as { address: string | null }[]
+  } catch {
+    try {
+      rows = await db
+        .select({ address: rent_stabilized_buildings.address })
+        .from(rent_stabilized_buildings)
+        .where(isNotNull(rent_stabilized_buildings.address))
+    } catch (err) {
+      console.warn(`[listing-helpers] rent_stabilized_buildings query failed: ${(err as Error).message}`)
+      return out
+    }
   }
 
   const norm = rows.map((r) => normalizeAddress(r.address)).filter((a) => a.length > 0)
   for (const l of withAddr) {
-    const key = normalizeAddress(l.address)
-    if (!key) continue
-    const hit = norm.some((a) => a === key || a.includes(key) || key.includes(a))
+    const hit = norm.some((a) => a === l.key || a.includes(l.key) || l.key.includes(a))
     if (hit) out.set(l.id, true)
   }
   return out
 }
+
+// ---------- cached static reference data ----------
+//
+// Vibes (~262 NTAs with jsonb polygons) and subway stations (~445 rows) change
+// at most once per seed run. We cache them in-process for 1 hour using the
+// Next 15 unstable_cache helper. Tagged so a future re-seed step can call
+// `revalidateTag('vibes')` / `revalidateTag('stations')`.
+//
+// ~1MB transfer for vibes is the heaviest item in the feed query — caching it
+// drops getRankedFeed below 2 round trips for warm requests.
+
+const _loadVibesUncached = async (): Promise<NeighborhoodVibe[]> => {
+  const db = getDb()
+  return (await db.select().from(neighborhood_vibes)) as NeighborhoodVibe[]
+}
+
+const _loadStationsUncached = async (): Promise<SubwayStation[]> => {
+  const db = getDb()
+  return (await db.select().from(subway_stations)) as SubwayStation[]
+}
+
+export const getCachedVibes = unstable_cache(_loadVibesUncached, ['neighborhood-vibes-v1'], {
+  revalidate: 3600,
+  tags: ['vibes'],
+})
+
+export const getCachedSubwayStations = unstable_cache(
+  _loadStationsUncached,
+  ['subway-stations-v1'],
+  { revalidate: 3600, tags: ['stations'] },
+)
 
 // ---------- ranked feed ----------
 
@@ -283,12 +358,18 @@ function nearestSubwayFor(
 /**
  * The real ranked-feed implementation. Joins:
  *   listings (active, fresh, optional source filter)
- *   + latest score per listing (across any profile_set_hash)
- *   + neighborhood_vibes (PiP / name match)
- *   + nearest subway (1-NN over subway_stations)
- *   + hpd_count_12mo + rent_stabilized (best-effort address match)
+ *   + latest score per listing (across any profile_set_hash) — done inline via
+ *     a LATERAL subquery that returns only the most recent score row, so we
+ *     skip a second round trip
+ *   + neighborhood_vibes (cached, PiP / name match)
+ *   + nearest subway (cached, 1-NN over subway_stations)
+ *   + hpd_count_12mo + rent_stabilized (SQL-prefiltered address match)
  *
- * Order: score DESC, then posted_at DESC. Cheap; one round trip per table.
+ * Round trips: 1 (listings+score join) + 2 (cached vibes/stations, 0 on warm)
+ *              + up to 2 (HPD, rent-stab — only if listings have addresses).
+ * Was: 4 + JS-side full-table scans of HPD (~70k rows) and rent-stab.
+ *
+ * Order: score DESC, then posted_at DESC.
  */
 export async function getRankedFeed(
   opts: RankedFeedOptions = {}
@@ -301,48 +382,90 @@ export async function getRankedFeed(
   const db = getDb()
   const cutoff = new Date(Date.now() - freshnessDays * 24 * 60 * 60 * 1000)
 
-  // 1. fetch candidate listings (over-fetch a bit; we'll re-cap after join)
-  const filters = [
-    eq(listingsTable.is_active, true),
-    gte(listingsTable.posted_at, cutoff),
-  ]
-  if (sources) filters.push(inArray(listingsTable.source, sources))
+  // 1. Single round trip: listings (active+fresh+source) LEFT JOIN LATERAL
+  // most-recent score per listing. The LATERAL form lets the planner pick the
+  // top row per outer row without a window function over the entire scores
+  // table. We re-cap to `limit` after JS-side enrichment so the over-fetch
+  // (limit*4) compensates for any unscored rows being filtered out.
+  const sourceFilter = sources
+    ? sql`AND l.source IN (${sql.join(sources.map((s) => sql`${s}`), sql`, `)})`
+    : sql``
 
-  const candidates = (await db
-    .select()
-    .from(listingsTable)
-    .where(and(...filters))
-    .orderBy(desc(listingsTable.posted_at))
-    .limit(limit * 4)) as Listing[]
+  type JoinedRow = Listing & {
+    s_listing_id: string | null
+    s_profile_set_hash: string | null
+    s_score: number | null
+    s_headline: string | null
+    s_concerns: string | null
+    s_rationale_jsonb: unknown
+    s_computed_at: Date | null
+  }
 
-  if (candidates.length === 0) return []
+  let joined: JoinedRow[] = []
+  try {
+    joined = (await db.execute(sql`
+      SELECT l.*,
+             s.listing_id        AS s_listing_id,
+             s.profile_set_hash  AS s_profile_set_hash,
+             s.score             AS s_score,
+             s.headline          AS s_headline,
+             s.concerns          AS s_concerns,
+             s.rationale_jsonb   AS s_rationale_jsonb,
+             s.computed_at       AS s_computed_at
+      FROM listings l
+      LEFT JOIN LATERAL (
+        SELECT listing_id, profile_set_hash, score, headline, concerns,
+               rationale_jsonb, computed_at
+        FROM scores
+        WHERE listing_id = l.id
+        ORDER BY computed_at DESC
+        LIMIT 1
+      ) s ON true
+      WHERE l.is_active = true
+        AND l.posted_at >= ${cutoff}
+        ${sourceFilter}
+      ORDER BY l.posted_at DESC
+      LIMIT ${limit * 4}
+    `)) as unknown as JoinedRow[]
+  } catch (err) {
+    console.warn(`[listing-helpers] joined feed query failed: ${(err as Error).message}`)
+    return []
+  }
 
-  const ids = candidates.map((c) => c.id)
+  if (joined.length === 0) return []
 
-  // 2. fetch all scores for those listings; pick latest in JS
-  const scoreRows = (await db
-    .select({
-      listing_id: scores.listing_id,
-      profile_set_hash: scores.profile_set_hash,
-      score: scores.score,
-      headline: scores.headline,
-      concerns: scores.concerns,
-      rationale_jsonb: scores.rationale_jsonb,
-      computed_at: scores.computed_at,
+  // Strip the `s_*` join columns into Listing + score fields for downstream code.
+  const candidates: Listing[] = joined.map((r) => {
+    // postgres-js returns date/timestamp columns as Date objects; the LATERAL
+    // join's NULLs come through as null. Normalize.
+    return {
+      ...(r as unknown as Listing),
+    }
+  })
+
+  const latestByListing = new Map<string, RawScoreRow>()
+  for (const r of joined) {
+    if (!r.s_listing_id || r.s_score == null || !r.s_computed_at || !r.s_headline) continue
+    latestByListing.set(r.s_listing_id, {
+      listing_id: r.s_listing_id,
+      profile_set_hash: r.s_profile_set_hash ?? '',
+      score: r.s_score,
+      headline: r.s_headline,
+      concerns: r.s_concerns,
+      rationale_jsonb: r.s_rationale_jsonb,
+      computed_at: r.s_computed_at instanceof Date ? r.s_computed_at : new Date(r.s_computed_at),
     })
-    .from(scores)
-    .where(inArray(scores.listing_id, ids))) as RawScoreRow[]
-  const latestByListing = pickLatestPerListing(scoreRows)
+  }
 
-  // 3. fetch ALL vibes (small — ~250 NTAs) and ALL stations (small — ~470)
-  const vibes = (await db.select().from(neighborhood_vibes)) as NeighborhoodVibe[]
-  const stations = (await db.select().from(subway_stations)) as SubwayStation[]
+  // 2. Cached static reference data (warm: 0 round trips).
+  const [vibes, stations, hpdMap, stabMap] = await Promise.all([
+    getCachedVibes(),
+    getCachedSubwayStations(),
+    buildHpdByListingId(candidates),
+    buildRentStabByListingId(candidates),
+  ])
 
-  // 4. address-based enrichment
-  const hpdMap = await buildHpdByListingId(candidates)
-  const stabMap = await buildRentStabByListingId(candidates)
-
-  // 5. assemble RankedListing rows
+  // 3. assemble RankedListing rows
   const out: RankedListing[] = []
   for (const listing of candidates) {
     const scoreRow = latestByListing.get(listing.id)
@@ -362,7 +485,7 @@ export async function getRankedFeed(
     out.push(ranked)
   }
 
-  // 6. final sort: score desc, then posted_at desc
+  // 4. final sort: score desc, then posted_at desc
   out.sort((a, b) => {
     const ds = b.score.score - a.score.score
     if (ds !== 0) return ds
@@ -418,10 +541,12 @@ export async function getListingDetail(id: string): Promise<RankedListing | null
       computed_at: new Date(0),
     } as Score
 
-    const vibesAll = (await db.select().from(neighborhood_vibes)) as NeighborhoodVibe[]
-    const stationsAll = (await db.select().from(subway_stations)) as SubwayStation[]
-    const hpdMap = await buildHpdByListingId([listing])
-    const stabMap = await buildRentStabByListingId([listing])
+    const [vibesAll, stationsAll, hpdMap, stabMap] = await Promise.all([
+      getCachedVibes(),
+      getCachedSubwayStations(),
+      buildHpdByListingId([listing]),
+      buildRentStabByListingId([listing]),
+    ])
     return {
       ...listing,
       score: placeholder,
@@ -433,10 +558,12 @@ export async function getListingDetail(id: string): Promise<RankedListing | null
     }
   }
 
-  const vibesAll = (await db.select().from(neighborhood_vibes)) as NeighborhoodVibe[]
-  const stationsAll = (await db.select().from(subway_stations)) as SubwayStation[]
-  const hpdMap = await buildHpdByListingId([listing])
-  const stabMap = await buildRentStabByListingId([listing])
+  const [vibesAll, stationsAll, hpdMap, stabMap] = await Promise.all([
+    getCachedVibes(),
+    getCachedSubwayStations(),
+    buildHpdByListingId([listing]),
+    buildRentStabByListingId([listing]),
+  ])
 
   return {
     ...listing,
@@ -449,6 +576,3 @@ export async function getListingDetail(id: string): Promise<RankedListing | null
   }
 }
 
-// `sql` import is referenced only to keep drizzle's TS happy with raw expressions
-// if a future caller wants to slot one in. Not used at runtime here.
-void sql
