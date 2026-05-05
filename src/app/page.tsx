@@ -1,4 +1,4 @@
-import { getRankedFeed, type FeedFilters } from '@/lib/feed-data'
+import { getRankedFeedWithCounts, type FeedFilters } from '@/lib/feed-data'
 import { FeedShell } from '@/components/feed/feed-shell'
 import {
   parseSearchQuery,
@@ -98,10 +98,11 @@ export default async function HomePage({
 
   // No query → existing behavior, plus the area default + welcome banner.
   if (!rawQuery) {
-    const listings = await getRankedFeed({
+    const { listings, neighborhood_counts } = await getRankedFeedWithCounts({
       freshnessDays: 30,
       neighborhoods: effectiveNeighborhoods,
     })
+    const latestSeen = pickLatestSeen(listings)
     return (
       <FeedShell
         initial={listings}
@@ -109,6 +110,9 @@ export default async function HomePage({
         usingDefaultAreas={usingDefaultAreas}
         showWelcome={showWelcome}
         currentProfileHash={currentProfileHash}
+        neighborhoodCounts={neighborhood_counts}
+        selectedNeighborhoods={explicitNbhds}
+        latestSeenAt={latestSeen}
       />
     )
   }
@@ -138,7 +142,7 @@ export default async function HomePage({
       keywords: [rawQuery],
     }
     const dropped = applyDrops(fallbackFilters, drop)
-    const listings = await getRankedFeed({
+    const { listings, neighborhood_counts } = await getRankedFeedWithCounts({
       freshnessDays: 30,
       keywords: dropped.keywords ?? undefined,
       query: rawQuery,
@@ -146,6 +150,7 @@ export default async function HomePage({
       // search is an explicit "show me X" gesture, not a passive feed.
       neighborhoods: explicitNbhds.length > 0 ? explicitNbhds : undefined,
     })
+    const latestSeen = pickLatestSeen(listings)
     return (
       <FeedShell
         initial={listings}
@@ -155,6 +160,9 @@ export default async function HomePage({
         usingDefaultAreas={false}
         showWelcome={showWelcome}
         currentProfileHash={currentProfileHash}
+        neighborhoodCounts={neighborhood_counts}
+        selectedNeighborhoods={explicitNbhds}
+        latestSeenAt={latestSeen}
       />
     )
   }
@@ -167,7 +175,8 @@ export default async function HomePage({
     neighborhoods: explicitNbhds.length > 0 ? explicitNbhds : undefined,
   }
   const filters = extendFeedFilters(base, effective)
-  const listings = await getRankedFeed(filters)
+  const { listings, neighborhood_counts } = await getRankedFeedWithCounts(filters)
+  const latestSeen = pickLatestSeen(listings)
 
   return (
     <FeedShell
@@ -178,6 +187,27 @@ export default async function HomePage({
       usingDefaultAreas={false}
       showWelcome={showWelcome}
       currentProfileHash={currentProfileHash}
+      neighborhoodCounts={neighborhood_counts}
+      selectedNeighborhoods={explicitNbhds}
+      latestSeenAt={latestSeen}
     />
   )
+}
+
+/**
+ * Pull the most-recent `last_seen_at` (falls back to `posted_at`) from the
+ * server-rendered feed so the new-listings poller can ask the API "anything
+ * new since I rendered?". Returns null when the feed is empty.
+ */
+function pickLatestSeen(listings: Array<{ last_seen_at?: Date | null; posted_at?: Date | null }>): string | null {
+  let max = 0
+  for (const l of listings) {
+    const candidates = [l.last_seen_at, l.posted_at]
+    for (const c of candidates) {
+      if (c instanceof Date && !Number.isNaN(c.getTime())) {
+        if (c.getTime() > max) max = c.getTime()
+      }
+    }
+  }
+  return max > 0 ? new Date(max).toISOString() : null
 }

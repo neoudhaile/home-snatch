@@ -7,6 +7,7 @@ import { FreshnessSelector } from './freshness-selector'
 import { SourceFilter } from './source-filter'
 import { SearchInput } from './search-input'
 import { ScrapeButton } from './scrape-button'
+import { AreasModal } from './areas-modal'
 import { cn } from '@/lib/utils'
 import type { Source } from '@/types'
 
@@ -91,7 +92,21 @@ export function Header({
               value={state.freshness}
               onChange={(freshness) => onChange({ ...state, freshness })}
             />
-            {areasToggle ? <AreasPill toggle={areasToggle} /> : null}
+            {areasToggle ? (
+              <>
+                <AreasPill toggle={areasToggle} />
+                <AreasModal
+                  trigger={
+                    <button
+                      type="button"
+                      className="hidden cursor-pointer text-[11px] text-muted-foreground underline-offset-[3px] transition-colors hover:text-foreground hover:underline lg:inline"
+                    >
+                      Edit
+                    </button>
+                  }
+                />
+              </>
+            ) : null}
             <SourceFilter
               value={state.sources}
               onChange={(sources) => onChange({ ...state, sources })}

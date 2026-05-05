@@ -16,6 +16,7 @@
     "dedupe": "tsx scripts/dedupe.ts",
     "refresh": "tsx scripts/refresh.ts",
     "rescore": "tsx scripts/rescore.ts",
+    "backfill:neighborhoods": "tsx scripts/backfill-neighborhoods.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -16,6 +16,7 @@
 import * as cheerio from 'cheerio'
 import pLimit from 'p-limit'
 import type { NewListing } from '@/types'
+import { canonicalize } from '@/lib/neighborhoods'
 import {
   absoluteUrl,
   clBorough,
@@ -181,11 +182,14 @@ async function parseDetail(hit: SearchHit): Promise<NewListing | null> {
   // Address (CL rarely has it explicitly; sometimes div.mapaddress)
   const address = $('.mapaddress').text().trim() || null
 
-  // Neighborhood: search-result hood, or from #titletextonly's location parens
-  const neighborhood =
+  // Neighborhood: search-result hood, or from #titletextonly's location parens.
+  // Run through `canonicalize` so the DB column converges to one form per area
+  // ("Bedford-Stuyvesant" not "Bed-Stuy" / "BedStuy" / "Bedford Stuy").
+  const rawNbhd =
     hit.neighborhood ||
     $('.postingtitletext small').text().replace(/[()]/g, '').trim() ||
     null
+  const neighborhood = canonicalize(rawNbhd) ?? rawNbhd
 
   // Reply email (CL relay) — visible reply page lives at /reply/<host>/apa/<id>; the
   // detail page exposes the relay address in JSON or in the reply <a>.

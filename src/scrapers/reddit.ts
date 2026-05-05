@@ -31,6 +31,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import pLimit from 'p-limit'
 import { getAnthropic, MODELS } from '@/lib/anthropic'
+import { canonicalize } from '@/lib/neighborhoods'
 import type { NewListing } from '@/types'
 import {
   getCachedClassifications,
@@ -251,7 +252,10 @@ function buildListing(post: RedditPost, c: Classification): NewListing {
     beds,
     photos: postPhotos(post),
     address: c.address ?? null,
-    neighborhood: c.neighborhood ?? null,
+    // Canonicalize at ingest: e.g. Haiku says "Bed-Stuy" → DB stores
+    // "Bedford-Stuyvesant". Falls through to the raw model output if the
+    // alias map doesn't recognize it.
+    neighborhood: canonicalize(c.neighborhood) ?? c.neighborhood ?? null,
     borough: c.borough ?? null,
     available_date: c.available_date ? new Date(c.available_date) : null,
     amenities: c.amenities ?? [],

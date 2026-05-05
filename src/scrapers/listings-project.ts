@@ -14,6 +14,7 @@
 
 import * as cheerio from 'cheerio'
 import type { NewListing } from '@/types'
+import { canonicalize } from '@/lib/neighborhoods'
 
 // @types/cheerio (legacy) and runtime cheerio v1 disagree on the return type
 // of `cheerio.load`. Use the runtime return type so internal helpers stay typed.
@@ -116,7 +117,9 @@ function fromNextData(nd: NextData, sourceUrl: string): NewListing[] {
       price_monthly: price ?? null,
       beds,
       photos,
-      neighborhood,
+      // Canonicalize so "SoHo" / "Soho" / "South of Houston" all become "SoHo"
+      // in the DB.
+      neighborhood: canonicalize(neighborhood) ?? neighborhood,
       borough,
       posted_at: posted_at && !Number.isNaN(posted_at.getTime()) ? posted_at : null,
       is_active: true,

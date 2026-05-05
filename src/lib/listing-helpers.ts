@@ -25,6 +25,7 @@ import {
 } from '@/db/schema'
 import { getDb } from '@/lib/db'
 import { haversineMeters } from '@/lib/subway'
+import { canonicalize, expandToAliases } from '@/lib/neighborhoods'
 import type {
   Listing,
   NeighborhoodVibe,
@@ -228,11 +229,33 @@ export type RankedFeedOptions = {
   limit?: number
   /**
    * Restrict to listings whose `neighborhood` matches one of these
-   * (case-insensitive substring via SQL ILIKE ANY). The user's joint
-   * `preferred_areas` becomes the default filter on the feed page; pass
-   * an empty array or omit to skip.
+   * (case-insensitive substring via SQL ILIKE ANY). Each input is expanded
+   * via `expandToAliases()` so "Bed-Stuy" matches "Bedford-Stuyvesant" rows.
+   * Pass an empty array or omit to skip.
    */
   neighborhoods?: string[]
+  /**
+   * When the `neighborhoods` filter is active, should listings whose
+   * `neighborhood` column is NULL still appear? Default false — Craigslist
+   * umbrella tags + Reddit posts often arrive with no neighborhood, and a
+   * profile-default filter is a strict "show me my areas" intent.
+   */
+  includeNullNeighborhoods?: boolean
+}
+
+/**
+ * Aggregate result returned alongside the ranked rows. The chip row uses this
+ * to show real per-area counts (e.g. "Bed-Stuy · 25"). Counts are computed
+ * over the same active+fresh+source-filtered window the feed reads from, but
+ * BEFORE the neighborhoods filter — so the chip "Bushwick · 18" shows the
+ * total Bushwick inventory regardless of whether the user is currently
+ * filtering it out.
+ */
+export type NeighborhoodCounts = Record<string, number>
+
+export type RankedFeedResult = {
+  listings: RankedListing[]
+  neighborhood_counts: NeighborhoodCounts
 }
 
 type RawScoreRow = {
@@ -381,12 +404,34 @@ function nearestSubwayFor(
 export async function getRankedFeed(
   opts: RankedFeedOptions = {}
 ): Promise<RankedListing[]> {
+  const result = await getRankedFeedWithCounts(opts)
+  return result.listings
+}
+
+/**
+ * Same as `getRankedFeed` but also returns per-neighborhood active-listing
+ * counts (used by the chip row). Counts are computed over the active+fresh
+ * window — i.e. the same population the feed itself surfaces — but BEFORE
+ * the neighborhoods filter is applied, so chips show "Bushwick · 18"
+ * regardless of whether Bushwick is currently selected.
+ */
+export async function getRankedFeedWithCounts(
+  opts: RankedFeedOptions = {}
+): Promise<RankedFeedResult> {
   const freshnessDays = opts.freshness_days ?? 14
   const sources = opts.sources && opts.sources.length > 0 ? opts.sources : null
   const minScore = opts.min_score ?? 0
   const limit = opts.limit ?? 200
-  const neighborhoods =
-    opts.neighborhoods && opts.neighborhoods.length > 0 ? opts.neighborhoods : null
+  // Expand display names → full alias set BEFORE we generate the SQL `ILIKE
+  // ANY` patterns. This is the bug fix — "Bed-Stuy" in the profile now
+  // expands to ["Bedford-Stuyvesant", "Bedford Stuyvesant", "Bed-Stuy",
+  // "Bed Stuy", "BedStuy", "Stuyvesant Heights", ...] and the SQL matches
+  // every legacy spelling already in the column.
+  const neighborhoodAliases =
+    opts.neighborhoods && opts.neighborhoods.length > 0
+      ? expandToAliases(opts.neighborhoods)
+      : null
+  const includeNullNbhd = opts.includeNullNeighborhoods === true
 
   const db = getDb()
   const cutoff = new Date(Date.now() - freshnessDays * 24 * 60 * 60 * 1000)
@@ -402,15 +447,18 @@ export async function getRankedFeed(
     : sql``
 
   // Neighborhood filter: case-insensitive substring match against
-  // `listings.neighborhood`. The user's preferred_areas (e.g. "SoHo",
-  // "East Village") are wrapped with `%foo%` and matched with
-  // `lower(neighborhood) ILIKE ANY (...)`. Substring (not exact) so that
-  // "Bedford-Stuyvesant" matches "Bed-Stuy" and "Crown Heights North"
-  // matches "Crown Heights".
-  const neighborhoodFilter = neighborhoods
-    ? sql`AND l.neighborhood IS NOT NULL AND lower(l.neighborhood) ILIKE ANY (${neighborhoods.map(
+  // `listings.neighborhood`. Aliases are wrapped with `%foo%` and matched
+  // with `lower(neighborhood) ILIKE ANY (...)`. We OR-in null when the
+  // caller opts to keep umbrella-tagged listings.
+  const nbhdMatch = neighborhoodAliases
+    ? sql`lower(l.neighborhood) ILIKE ANY (${neighborhoodAliases.map(
         (n) => `%${n.toLowerCase()}%`,
       )}::text[])`
+    : null
+  const neighborhoodFilter = nbhdMatch
+    ? includeNullNbhd
+      ? sql`AND (l.neighborhood IS NULL OR ${nbhdMatch})`
+      : sql`AND l.neighborhood IS NOT NULL AND ${nbhdMatch}`
     : sql``
 
   type JoinedRow = Listing & {
@@ -423,39 +471,67 @@ export async function getRankedFeed(
     s_computed_at: Date | null
   }
 
+  // Run the listings join AND the per-neighborhood count aggregate in
+  // parallel. The count aggregate ignores the neighborhoods filter so the
+  // chip row reflects total inventory, not "in your selection".
+  type CountRow = { neighborhood: string | null; n: number }
+
   let joined: JoinedRow[] = []
+  let countRows: CountRow[] = []
   try {
-    joined = (await db.execute(sql`
-      SELECT l.*,
-             s.listing_id        AS s_listing_id,
-             s.profile_set_hash  AS s_profile_set_hash,
-             s.score             AS s_score,
-             s.headline          AS s_headline,
-             s.concerns          AS s_concerns,
-             s.rationale_jsonb   AS s_rationale_jsonb,
-             s.computed_at       AS s_computed_at
-      FROM listings l
-      LEFT JOIN LATERAL (
-        SELECT listing_id, profile_set_hash, score, headline, concerns,
-               rationale_jsonb, computed_at
-        FROM scores
-        WHERE listing_id = l.id
-        ORDER BY computed_at DESC
-        LIMIT 1
-      ) s ON true
-      WHERE l.is_active = true
-        AND l.posted_at >= ${cutoff}
-        ${sourceFilter}
-        ${neighborhoodFilter}
-      ORDER BY l.posted_at DESC
-      LIMIT ${limit * 4}
-    `)) as unknown as JoinedRow[]
+    const [j, c] = await Promise.all([
+      db.execute(sql`
+        SELECT l.*,
+               s.listing_id        AS s_listing_id,
+               s.profile_set_hash  AS s_profile_set_hash,
+               s.score             AS s_score,
+               s.headline          AS s_headline,
+               s.concerns          AS s_concerns,
+               s.rationale_jsonb   AS s_rationale_jsonb,
+               s.computed_at       AS s_computed_at
+        FROM listings l
+        LEFT JOIN LATERAL (
+          SELECT listing_id, profile_set_hash, score, headline, concerns,
+                 rationale_jsonb, computed_at
+          FROM scores
+          WHERE listing_id = l.id
+          ORDER BY computed_at DESC
+          LIMIT 1
+        ) s ON true
+        WHERE l.is_active = true
+          AND l.posted_at >= ${cutoff}
+          ${sourceFilter}
+          ${neighborhoodFilter}
+        ORDER BY l.posted_at DESC
+        LIMIT ${limit * 4}
+      `) as unknown as Promise<JoinedRow[]>,
+      db.execute(sql`
+        SELECT l.neighborhood AS neighborhood, count(*)::int AS n
+        FROM listings l
+        WHERE l.is_active = true
+          AND l.posted_at >= ${cutoff}
+          ${sourceFilter}
+        GROUP BY l.neighborhood
+      `) as unknown as Promise<CountRow[]>,
+    ])
+    joined = j
+    countRows = c
   } catch (err) {
     console.warn(`[listing-helpers] joined feed query failed: ${(err as Error).message}`)
-    return []
+    return { listings: [], neighborhood_counts: {} }
   }
 
-  if (joined.length === 0) return []
+  // Roll up counts by canonical name so "Bedford-Stuyvesant" and "Bed-Stuy"
+  // and "BedStuy" all bucket together. Unknown names pass through as-is so
+  // we don't lose long-tail neighborhoods.
+  const neighborhood_counts: NeighborhoodCounts = {}
+  for (const row of countRows) {
+    if (!row.neighborhood) continue
+    const canonical = canonicalize(row.neighborhood) ?? row.neighborhood
+    neighborhood_counts[canonical] = (neighborhood_counts[canonical] ?? 0) + (row.n ?? 0)
+  }
+
+  if (joined.length === 0) return { listings: [], neighborhood_counts }
 
   // Strip the `s_*` join columns into Listing + score fields for downstream code.
   const candidates: Listing[] = joined.map((r) => {
@@ -517,7 +593,10 @@ export async function getRankedFeed(
     return bp - ap
   })
 
-  return out.slice(0, limit)
+  return {
+    listings: out.slice(0, limit),
+    neighborhood_counts,
+  }
 }
 
 /**

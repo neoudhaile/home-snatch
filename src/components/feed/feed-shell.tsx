@@ -7,6 +7,8 @@ import { Header, type HeaderState } from '@/components/shell/header'
 import { BentoGrid } from './bento-grid'
 import { EmptyState } from './empty-state'
 import { SearchBanner } from './search-banner'
+import { NeighborhoodChips } from './neighborhood-chips'
+import { NewListingsPoller } from './new-listings-poller'
 import type { RankedListing, Source } from '@/types'
 import type { ExtractedFilters, FilterChipKey } from '@/lib/search'
 
@@ -18,6 +20,9 @@ export function FeedShell({
   usingDefaultAreas = false,
   showWelcome = false,
   currentProfileHash = '',
+  neighborhoodCounts = {},
+  selectedNeighborhoods = [],
+  latestSeenAt = null,
 }: {
   initial: RankedListing[]
   /** Raw NL query from `?q=` (passed through so the input can re-seed). */
@@ -32,6 +37,12 @@ export function FeedShell({
   showWelcome?: boolean
   /** Stable hash of the live profile set; used to flag stale-score listings. */
   currentProfileHash?: string
+  /** canonical → count, computed off the active+fresh window. */
+  neighborhoodCounts?: Record<string, number>
+  /** Neighborhoods explicitly chosen via `?neighborhoods=` (display form). */
+  selectedNeighborhoods?: string[]
+  /** Most-recent `last_seen_at` in the rendered feed; passed to the poller. */
+  latestSeenAt?: string | null
 }) {
   const router = useRouter()
   const params = useSearchParams()
@@ -67,6 +78,13 @@ export function FeedShell({
   const isFullyEmpty = initial.length === 0
   const isSearchActive = !!searchFilters && !!searchQuery
   const hasJointAreas = jointAreas.length > 0
+  // Total active count (sum of all per-neighborhood counts) — fed to the
+  // "All NYC" pill so users see "All NYC · 1900" not just an unanchored label.
+  const totalActiveCount = useMemo(() => {
+    let n = 0
+    for (const v of Object.values(neighborhoodCounts)) n += v
+    return n
+  }, [neighborhoodCounts])
 
   // Chip-removal: append the chip key to `?drop=...` so the server re-runs
   // with that field stripped.
@@ -119,9 +137,22 @@ export function FeedShell({
             : undefined
         }
       />
+      <NewListingsPoller initialLatest={latestSeenAt} />
       <main className="mx-auto w-full max-w-[1480px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
         {welcomeOpen ? (
           <WelcomeBanner onDismiss={() => setWelcomeOpen(false)} />
+        ) : null}
+        {/* Inline neighborhood picker — sits above the bento grid so a single
+            click rewires the feed without re-running the wizard. We hide it
+            during an active search since the search banner owns the filter
+            chip surface in that flow. */}
+        {!isSearchActive && (hasJointAreas || Object.keys(neighborhoodCounts).length > 0) ? (
+          <NeighborhoodChips
+            jointAreas={jointAreas}
+            selectedAreas={selectedNeighborhoods}
+            counts={neighborhoodCounts}
+            totalActiveCount={totalActiveCount}
+          />
         ) : null}
         {isSearchActive && searchFilters ? (
           <SearchBanner

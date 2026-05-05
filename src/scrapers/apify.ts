@@ -55,7 +55,22 @@
 
 import type { NewListing } from '@/types'
 import { loadAllProfileFiles, type ProfileFile } from '@/lib/profile-set'
+import { canonicalize } from '@/lib/neighborhoods'
 import { runApifyActorAsync } from '@/lib/apify-async'
+
+/**
+ * Pick a non-null neighborhood from any of the candidate strings, then
+ * canonicalize. Used inside per-actor mappers so DB rows converge to one
+ * form per area.
+ */
+function normNbhd(...candidates: Array<string | null | undefined>): string | null {
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) {
+      return canonicalize(c) ?? c.trim()
+    }
+  }
+  return null
+}
 
 function token(): string | null {
   return process.env.APIFY_TOKEN ?? null
@@ -386,7 +401,7 @@ function mapZillow(item: ZillowItem, v: Variant): NewListing | null {
     address: item.address ?? null,
     unit: item.unitNumber ?? null,
     borough: v.borough ?? item.city ?? null,
-    neighborhood: v.neighborhood ?? null,
+    neighborhood: normNbhd(v.neighborhood),
     zip: item.zipCode ?? null,
     lat: item.latitude ?? null,
     lng: item.longitude ?? null,
@@ -499,7 +514,7 @@ function mapStreetEasy(item: StreetEasyItem, v: Variant): NewListing | null {
     sqft: typeof item.sqft === 'number' ? item.sqft : asNumber(item.sqft),
     photos,
     address: item.address ?? null,
-    neighborhood: item.neighborhood ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: v.borough ?? null,
     contact: {
       agency: item.broker,
@@ -602,7 +617,7 @@ function mapTrulia(item: TruliaItem, v: Variant): NewListing | null {
     sqft: item.squareFeet ?? null,
     photos: asPhotoArray(item.photos) || asPhotoArray(item.images),
     address: item.address ?? null,
-    neighborhood: item.neighborhood ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: item.city ?? v.borough ?? null,
     zip: item.zip ?? null,
     lat: item.latitude ?? null,
@@ -737,7 +752,7 @@ function mapApartments(item: ApartmentsItem, v: Variant): NewListing | null {
     amenities,
     photos: asPhotoArray(item.images),
     address: item.address ?? null,
-    neighborhood: item.neighborhood ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: v.borough ?? item.city ?? null,
     zip: item.zipCode ?? null,
     lat: item.latitude ?? null,
@@ -878,7 +893,7 @@ function mapRealtor(item: RealtorItem, v: Variant): NewListing | null {
     sqft: item.sqft ?? null,
     photos,
     address,
-    neighborhood: nbhd ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(nbhd, v.neighborhood),
     borough: v.borough ?? item.city ?? null,
     zip: item.zipcode ?? null,
     lat: item.latitude ?? null,
@@ -995,7 +1010,7 @@ function mapRedfin(item: RedfinItem, v: Variant): NewListing | null {
     sqft: item.sqft ?? null,
     photos,
     address,
-    neighborhood: v.neighborhood ?? null,
+    neighborhood: normNbhd(v.neighborhood),
     borough: v.borough ?? item.city ?? null,
     zip: item.zip != null ? String(item.zip) : null,
     lat: item.latitude ?? null,
@@ -1091,7 +1106,7 @@ function mapHotPads(item: HotPadsItem, v: Variant): NewListing | null {
     photos,
     amenities,
     address: item.address ?? null,
-    neighborhood: item.neighborhood ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: v.borough ?? item.city ?? null,
     zip: item.zip ?? null,
     lat: item.latitude ?? null,
@@ -1188,7 +1203,7 @@ function mapRentHop(item: RentHopItem, v: Variant): NewListing | null {
     photos,
     amenities,
     address: item.address ?? null,
-    neighborhood: item.neighborhood ?? v.neighborhood ?? null,
+    neighborhood: normNbhd(item.neighborhood, v.neighborhood),
     borough: v.borough ?? item.city ?? null,
     zip: item.zip ?? null,
     lat: item.latitude ?? null,

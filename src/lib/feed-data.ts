@@ -1,5 +1,7 @@
 import type { RankedListing, Source } from '@/types'
 import * as real from '@/lib/listing-helpers'
+import type { NeighborhoodCounts } from '@/lib/listing-helpers'
+import { canonicalize } from '@/lib/neighborhoods'
 import { unstable_cache } from 'next/cache'
 
 /**
@@ -1086,17 +1088,29 @@ const _cachedRealFeed = unstable_cache(
     sources: Source[] | undefined,
     neighborhoods: string[] | undefined,
   ) => {
-    return real.getRankedFeed({
+    return real.getRankedFeedWithCounts({
       freshness_days: freshnessDays,
       sources,
       neighborhoods,
     })
   },
-  ['ranked-feed-v2'],
+  ['ranked-feed-v3'],
   { revalidate: 60, tags: ['feed'] },
 )
 
 export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListing[]> {
+  const { listings } = await getRankedFeedWithCounts(opts)
+  return listings
+}
+
+/**
+ * Same as `getRankedFeed` but also returns neighborhood counts for the chip
+ * row. Counts are computed off the unfiltered (no-neighborhoods-filter)
+ * candidate set so chips show real inventory regardless of selection.
+ */
+export async function getRankedFeedWithCounts(
+  opts: FeedFilters = {},
+): Promise<{ listings: RankedListing[]; neighborhood_counts: NeighborhoodCounts }> {
   // Normalize neighborhoods so the cache key is stable across [a,b] / [b,a].
   const normalizedNbhds =
     opts.neighborhoods && opts.neighborhoods.length > 0
@@ -1105,19 +1119,25 @@ export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListi
 
   if (process.env.DATABASE_URL) {
     try {
-      const rows = await _cachedRealFeed(
+      const result = await _cachedRealFeed(
         opts.freshnessDays,
         opts.sources,
         normalizedNbhds,
       )
-      if (rows.length > 0) {
+      if (result.listings.length > 0) {
         // Drop `neighborhoods` from the JS-side post-filter — already applied at SQL.
         const { neighborhoods: _drop, ...rest } = opts
-        return applyExtendedFilters(rows, rest)
+        return {
+          listings: applyExtendedFilters(result.listings, rest),
+          neighborhood_counts: result.neighborhood_counts,
+        }
       }
       // Empty result with neighborhoods filter active: tell the caller honestly
-      // (don't paper over with mocks).
-      if (normalizedNbhds && normalizedNbhds.length > 0) return []
+      // (don't paper over with mocks). Counts still ship through so the chip
+      // row can render "+0" honestly.
+      if (normalizedNbhds && normalizedNbhds.length > 0) {
+        return { listings: [], neighborhood_counts: result.neighborhood_counts }
+      }
       // Empty DB → fall through to mocks so design-time isn't a blank page.
     } catch (err) {
       console.warn('[feed-data] DB read failed, falling back to mocks:', (err as Error).message)
@@ -1134,7 +1154,18 @@ export async function getRankedFeed(opts: FeedFilters = {}): Promise<RankedListi
     return (a.freshness_hours ?? 0) - (b.freshness_hours ?? 0)
   })
   const ranked = filtered as unknown as RankedListing[]
-  return applyExtendedFilters(ranked, opts)
+  // Mock-mode counts: build from the mocks pre-extended-filters so chip
+  // numbers don't lie about what's available.
+  const counts: NeighborhoodCounts = {}
+  for (const m of mocks) {
+    if (!m.neighborhood) continue
+    const k = canonicalize(m.neighborhood) ?? m.neighborhood
+    counts[k] = (counts[k] ?? 0) + 1
+  }
+  return {
+    listings: applyExtendedFilters(ranked, opts),
+    neighborhood_counts: counts,
+  }
 }
 
 export async function getListing(id: string): Promise<RankedListing | null> {

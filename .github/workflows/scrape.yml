@@ -49,29 +49,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        # Hits the same /api/admin/dq?action=rescore logic via a small
-        # tsx invocation. We do this inline so a scrape failure doesn't
-        # leave new listings without scores.
-        run: |
-          npx tsx -e '
-            import("./src/agents/score.ts").then(async ({ scoreListings }) => {
-              const { getDb } = await import("./src/lib/db.ts");
-              const { listings, scores } = await import("./src/db/schema.ts");
-              const { loadAllProfileFiles } = await import("./src/lib/profile-set.ts");
-              const profiles = await loadAllProfileFiles();
-              if (profiles.length === 0) { console.log("[rescore] no profiles configured, skipping"); process.exit(0); }
-              const db = getDb();
-              const rows = await db.select().from(listings);
-              const scoreRows = await db.select().from(scores);
-              const scored = new Set(scoreRows.map(s => s.listing_id));
-              const unscored = rows.filter(r => !scored.has(r.id));
-              console.log(`[rescore] scoring ${unscored.length} new listings against ${profiles.length} profiles`);
-              if (unscored.length === 0) process.exit(0);
-              const out = await scoreListings(unscored, profiles);
-              for (const s of out) {
-                await db.insert(scores).values(s).onConflictDoUpdate({ target: [scores.listing_id, scores.profile_set_hash], set: s });
-              }
-              console.log(`[rescore] done, wrote ${out.length} scores`);
-              process.exit(0);
-            }).catch(e => { console.error(e); process.exit(1); });
-          '
+        # Calls the proper script which handles skipAlreadyScored, options
+        # object, station enrichment, etc. — same code path as `npm run rescore`
+        # locally. Was previously an inline `tsx -e` that drifted out of sync
+        # with score.ts's signature.
+        run: npm run rescore
