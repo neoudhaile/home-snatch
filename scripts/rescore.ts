@@ -33,12 +33,17 @@ async function main() {
   // from ~90s to <5s (we filter out listings whose profile_set_hash row
   // already exists). When the user *does* want a forced rescore (after a
   // prompt edit), they should clear the scores table or flip this flag.
+  // Force flag: `npm run rescore -- --force` rescores everything regardless of
+  // whether a row already exists for the current profile_set_hash. Use after
+  // semantic profile edits that don't change the hash (e.g. vibe value tweaks
+  // — current hashing only covers vibe keys).
+  const force = process.argv.includes('--force')
   const out = await scoreListings(allListings, {
     profilesOverride: profiles,
     hpdByListingId: new Map(),
     rentStabByListingId: new Map(),
     stations,
-    skipAlreadyScored: true,
+    skipAlreadyScored: !force,
   })
   console.log('[rescore] scored:', out.length)
 
