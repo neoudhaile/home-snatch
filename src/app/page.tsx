@@ -6,7 +6,14 @@ import {
   type ExtractedFilters,
   type FilterChipKey,
 } from '@/lib/search'
-import { hashProfileSet, loadAllProfileFiles, mergeProfileConstraints } from '@/lib/profile-set'
+import {
+  getKnownSavers,
+  hashProfileSet,
+  loadAllProfileFiles,
+  mergeProfileConstraints,
+} from '@/lib/profile-set'
+import { getSaveStateForListings, getTotalSavedCount } from '@/lib/save-state'
+import type { RankedListing } from '@/types'
 
 type SearchParams = Promise<{
   q?: string
@@ -75,9 +82,32 @@ export default async function HomePage({
   const joint = mergeProfileConstraints(profiles)
   const jointAreas = joint.preferred_areas
   // Stable hash of the on-disk profile set. Listings whose latest score has a
-  // different `profile_set_hash` are mid-rescore — surfaced via a "scoring..."
+  // different `profile_set_hash` are mid-rescore. Surfaced via a "scoring..."
   // shimmer on the score badge so the user knows the rank is in flight.
   const currentProfileHash = profiles.length > 0 ? hashProfileSet(profiles) : ''
+
+  // Default saver wires the heart on every card. First slug in the profile
+  // set wins. Multi-saver picker is a follow-up.
+  const savers = await getKnownSavers().catch(() => [])
+  const defaultSaver = savers[0]
+  // Total saved-count for the header pill. Cheap aggregate.
+  const savedCount = await getTotalSavedCount().catch(() => 0)
+
+  /**
+   * Compute the listing IDs the default saver has already saved across the
+   * rendered feed so each heart hydrates with the right initial state.
+   */
+  async function savedIdsFor(listings: RankedListing[]): Promise<string[]> {
+    if (!defaultSaver || listings.length === 0) return []
+    const map = await getSaveStateForListings(listings.map((l) => l.id)).catch(
+      () => ({} as Record<string, string[]>),
+    )
+    const out: string[] = []
+    for (const id of Object.keys(map)) {
+      if (map[id]?.includes(defaultSaver)) out.push(id)
+    }
+    return out
+  }
 
   // Resolve the effective neighborhood filter:
   //   1. Explicit `?neighborhoods=foo,bar` always wins.
@@ -103,6 +133,7 @@ export default async function HomePage({
       neighborhoods: effectiveNeighborhoods,
     })
     const latestSeen = pickLatestSeen(listings)
+    const initialSavedIds = await savedIdsFor(listings)
     return (
       <FeedShell
         initial={listings}
@@ -113,6 +144,9 @@ export default async function HomePage({
         neighborhoodCounts={neighborhood_counts}
         selectedNeighborhoods={explicitNbhds}
         latestSeenAt={latestSeen}
+        defaultSaver={defaultSaver}
+        initialSavedIds={initialSavedIds}
+        savedCount={savedCount}
       />
     )
   }
@@ -146,11 +180,12 @@ export default async function HomePage({
       freshnessDays: 30,
       keywords: dropped.keywords ?? undefined,
       query: rawQuery,
-      // The user-typed query takes priority over the profile area default —
-      // search is an explicit "show me X" gesture, not a passive feed.
+      // The user-typed query takes priority over the profile area default.
+      // Search is an explicit "show me X" gesture, not a passive feed.
       neighborhoods: explicitNbhds.length > 0 ? explicitNbhds : undefined,
     })
     const latestSeen = pickLatestSeen(listings)
+    const initialSavedIds = await savedIdsFor(listings)
     return (
       <FeedShell
         initial={listings}
@@ -163,6 +198,9 @@ export default async function HomePage({
         neighborhoodCounts={neighborhood_counts}
         selectedNeighborhoods={explicitNbhds}
         latestSeenAt={latestSeen}
+        defaultSaver={defaultSaver}
+        initialSavedIds={initialSavedIds}
+        savedCount={savedCount}
       />
     )
   }
@@ -177,6 +215,7 @@ export default async function HomePage({
   const filters = extendFeedFilters(base, effective)
   const { listings, neighborhood_counts } = await getRankedFeedWithCounts(filters)
   const latestSeen = pickLatestSeen(listings)
+  const initialSavedIds = await savedIdsFor(listings)
 
   return (
     <FeedShell
@@ -190,6 +229,9 @@ export default async function HomePage({
       neighborhoodCounts={neighborhood_counts}
       selectedNeighborhoods={explicitNbhds}
       latestSeenAt={latestSeen}
+      defaultSaver={defaultSaver}
+      initialSavedIds={initialSavedIds}
+      savedCount={savedCount}
     />
   )
 }

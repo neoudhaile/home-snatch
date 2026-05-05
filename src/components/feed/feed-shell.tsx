@@ -23,6 +23,9 @@ export function FeedShell({
   neighborhoodCounts = {},
   selectedNeighborhoods = [],
   latestSeenAt = null,
+  defaultSaver,
+  initialSavedIds = [],
+  savedCount = 0,
 }: {
   initial: RankedListing[]
   /** Raw NL query from `?q=` (passed through so the input can re-seed). */
@@ -43,6 +46,12 @@ export function FeedShell({
   selectedNeighborhoods?: string[]
   /** Most-recent `last_seen_at` in the rendered feed; passed to the poller. */
   latestSeenAt?: string | null
+  /** Saver slug for the heart on each card (sourced from `getKnownSavers()[0]`). */
+  defaultSaver?: string
+  /** Listing IDs already saved by `defaultSaver`, used to seed each heart's state. */
+  initialSavedIds?: string[]
+  /** Total count for the header pill. */
+  savedCount?: number
 }) {
   const router = useRouter()
   const params = useSearchParams()
@@ -78,6 +87,21 @@ export function FeedShell({
   const isFullyEmpty = initial.length === 0
   const isSearchActive = !!searchFilters && !!searchQuery
   const hasJointAreas = jointAreas.length > 0
+  const hasAnyListings = initial.length > 0
+  // Stale-score nudge: when at least one listing's score was computed against
+  // a profile_set_hash that's no longer current (and we know what current is),
+  // surface a one-line note above the bento so the rescoring shimmer doesn't
+  // feel mysterious.
+  const anyStaleScore = useMemo(() => {
+    if (!currentProfileHash) return false
+    for (const l of initial) {
+      const h = l.score?.profile_set_hash ?? ''
+      if (h && h !== 'mock' && h !== currentProfileHash) return true
+    }
+    return false
+  }, [initial, currentProfileHash])
+  // Stable Set wrapper so we don't re-construct on every render.
+  const savedIdSet = useMemo(() => new Set(initialSavedIds), [initialSavedIds])
   // Total active count (sum of all per-neighborhood counts) — fed to the
   // "All NYC" pill so users see "All NYC · 1900" not just an unanchored label.
   const totalActiveCount = useMemo(() => {
@@ -125,6 +149,7 @@ export function FeedShell({
       <Header
         state={state}
         onChange={setState}
+        savedCount={savedCount}
         showFilters={!isFullyEmpty || isSearchActive}
         initialQuery={searchQuery}
         areasToggle={
@@ -142,7 +167,13 @@ export function FeedShell({
         {welcomeOpen ? (
           <WelcomeBanner onDismiss={() => setWelcomeOpen(false)} />
         ) : null}
-        {/* Inline neighborhood picker — sits above the bento grid so a single
+        {/* No-profile nudge: when there are listings but no joint areas
+            configured, the ranking can't be personalized. Surface a one-line
+            CTA to /setup. Hidden during search (the chips own that surface). */}
+        {!isSearchActive && hasAnyListings && jointAreas.length === 0 ? (
+          <NoProfileNudge />
+        ) : null}
+        {/* Inline neighborhood picker. Sits above the bento grid so a single
             click rewires the feed without re-running the wizard. We hide it
             during an active search since the search banner owns the filter
             chip surface in that flow. */}
@@ -185,7 +216,20 @@ export function FeedShell({
                 onShowAll={onToggleAreas}
               />
             ) : null}
-            <BentoGrid listings={listings} currentProfileHash={currentProfileHash} />
+            {anyStaleScore ? (
+              <p
+                role="status"
+                className="mb-3 text-[12px] leading-relaxed text-muted-foreground"
+              >
+                Some scores are still updating against your profile.
+              </p>
+            ) : null}
+            <BentoGrid
+              listings={listings}
+              currentProfileHash={currentProfileHash}
+              defaultSaver={defaultSaver}
+              savedIds={savedIdSet}
+            />
           </>
         )}
       </main>
@@ -194,6 +238,27 @@ export function FeedShell({
 }
 
 /* ---------- area-aware empty + welcome ---------- */
+
+function NoProfileNudge() {
+  return (
+    <div
+      role="status"
+      className="mb-5 flex items-center gap-3 rounded-2xl border border-border bg-surface-2 px-4 py-3"
+    >
+      <span aria-hidden className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+      <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/90">
+        These aren&apos;t ranked for you yet.{' '}
+        <a
+          href="/setup"
+          className="cursor-pointer font-medium text-foreground underline-offset-[3px] hover:underline"
+        >
+          Set up a profile
+        </a>{' '}
+        to get personalised scores.
+      </p>
+    </div>
+  )
+}
 
 function WelcomeBanner({ onDismiss }: { onDismiss: () => void }) {
   return (

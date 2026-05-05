@@ -18,6 +18,7 @@ import {
   VIBE_LABELS,
   initialWizardState,
   wizardReducer,
+  type StepKey,
   type WizardProfile,
   type WizardState,
   type WizardWho,
@@ -47,13 +48,26 @@ export function SetupWizard({ seed }: { seed: Seed }) {
   )
   const [submitting, setSubmitting] = useState(false)
 
-  const stepKey = STEPS[state.step]
   const profile = state.profiles[state.activeIndex]
-  const totalSteps = STEPS.length
   const profileCount = state.profiles.length
   const showWhoStep = profileCount > 1
 
-  const isLastStep = state.step === totalSteps - 1
+  // The set of step keys actually surfaced in the UI. Single-profile setups
+  // skip 'who' entirely, so the indicator reads "Step 1 of 8" not 9.
+  const displayedSteps = showWhoStep ? STEPS : (STEPS.slice(1) as readonly StepKey[])
+  const totalSteps = displayedSteps.length
+
+  // `state.step` indexes into the full STEPS list; when 'who' is hidden, the
+  // first reachable step is index 1. Clamp here so navigation never lands on
+  // the hidden step.
+  const minStep = showWhoStep ? 0 : 1
+  const safeStateStep = Math.max(state.step, minStep)
+  const stepKey = STEPS[safeStateStep]
+  // Display index = the position within `displayedSteps`. For single-profile
+  // setups that's `state.step - 1` (we sliced off 'who').
+  const displayedStep = showWhoStep ? safeStateStep : safeStateStep - 1
+
+  const isLastStep = safeStateStep === STEPS.length - 1
   const canAdvance = (() => {
     if (stepKey === 'who') return state.who !== null
     if (stepKey === 'basics') return profile.budget_max > profile.budget_min
@@ -85,8 +99,8 @@ export function SetupWizard({ seed }: { seed: Seed }) {
       // Server already revalidated the `feed` cache tag and kicked off a
       // background rescore via Next 16 `after()`. Bust the client router
       // cache, then route to the feed with a `welcome` flag so the feed
-      // shell renders the "re-ranking" banner.
-      toast.success('Saved. Re-ranking against your profile.')
+      // shell renders the "re-ranking" banner. The banner does the same
+      // job as a toast with more context, so we skip the toast on save.
       router.refresh()
       router.replace('/?welcome=1')
     } catch {
@@ -104,9 +118,14 @@ export function SetupWizard({ seed }: { seed: Seed }) {
     dispatch({ type: 'next' })
   }
 
-  // Single-profile setups skip the WhoStep entirely.
-  const effectiveStepKey = stepKey === 'who' && !showWhoStep ? 'basics' : stepKey
-  const effectiveStep = stepKey === 'who' && !showWhoStep ? 1 : state.step
+  // Jump directly to a displayed step index. Used by the clickable progress
+  // rail so the Review step can rewind to any earlier step. We translate the
+  // displayed index back into the full-STEPS index (offset by 1 when 'who'
+  // is hidden) so the reducer's existing `goto` semantics still hold.
+  function gotoDisplayed(displayedIndex: number) {
+    const target = showWhoStep ? displayedIndex : displayedIndex + 1
+    dispatch({ type: 'goto', step: target })
+  }
 
   return (
     <>
@@ -124,7 +143,13 @@ export function SetupWizard({ seed }: { seed: Seed }) {
           Skip setup
         </Link>
 
-        <ProgressRail step={effectiveStep} total={totalSteps} stepKey={effectiveStepKey} />
+        <ProgressRail
+          step={displayedStep}
+          total={totalSteps}
+          stepKey={stepKey}
+          stepKeys={displayedSteps}
+          onJump={gotoDisplayed}
+        />
 
         {/* Active-profile switcher when editing >1 profile in this session */}
         {state.who === 'all' && state.step > 0 && profileCount > 1 ? (
@@ -146,8 +171,8 @@ export function SetupWizard({ seed }: { seed: Seed }) {
           </div>
         ) : null}
 
-        <StepFrame stepKey={effectiveStepKey}>
-          {effectiveStepKey === 'who' ? (
+        <StepFrame stepKey={stepKey}>
+          {stepKey === 'who' ? (
             <WhoStep
               who={state.who}
               profiles={state.profiles}
@@ -161,13 +186,13 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }}
             />
           ) : null}
-          {effectiveStepKey === 'basics' ? (
+          {stepKey === 'basics' ? (
             <BasicsStep
               profile={profile}
               onPatch={(patch) => dispatch({ type: 'patch', patch })}
             />
           ) : null}
-          {effectiveStepKey === 'must' ? (
+          {stepKey === 'must' ? (
             <ChipPicker
               title="Must-haves"
               subtitle="What absolutely needs to be in the apartment."
@@ -185,7 +210,7 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }
             />
           ) : null}
-          {effectiveStepKey === 'breakers' ? (
+          {stepKey === 'breakers' ? (
             <ChipPicker
               title="Deal-breakers"
               subtitle="What kills a listing on sight."
@@ -203,7 +228,7 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }
             />
           ) : null}
-          {effectiveStepKey === 'vibes' ? (
+          {stepKey === 'vibes' ? (
             <VibesStep
               profile={profile}
               onPatch={(key, value) =>
@@ -211,7 +236,7 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }
             />
           ) : null}
-          {effectiveStepKey === 'commute' ? (
+          {stepKey === 'commute' ? (
             <CommuteStep
               profile={profile}
               onAdd={() => dispatch({ type: 'commute-add' })}
@@ -221,7 +246,7 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }
             />
           ) : null}
-          {effectiveStepKey === 'areas' ? (
+          {stepKey === 'areas' ? (
             <AreasStep
               selected={profile.preferred_areas}
               onToggle={(v) =>
@@ -236,24 +261,24 @@ export function SetupWizard({ seed }: { seed: Seed }) {
               }
             />
           ) : null}
-          {effectiveStepKey === 'notes' ? (
+          {stepKey === 'notes' ? (
             <NotesStep
               value={profile.notes}
               onChange={(notes) => dispatch({ type: 'patch', patch: { notes } })}
             />
           ) : null}
-          {effectiveStepKey === 'review' ? (
+          {stepKey === 'review' ? (
             <ReviewStep state={state} showWhoStep={showWhoStep} />
           ) : null}
         </StepFrame>
 
         <NavRow
-          step={effectiveStep}
+          step={displayedStep}
           total={totalSteps}
           isLast={isLastStep}
           submitting={submitting}
           canAdvance={canAdvance}
-          stepKey={effectiveStepKey}
+          stepKey={stepKey}
           onPrev={() => dispatch({ type: 'prev' })}
           onNext={onNext}
           // Skip just advances the step without mutating the active profile.
@@ -271,10 +296,16 @@ function ProgressRail({
   step,
   total,
   stepKey,
+  stepKeys,
+  onJump,
 }: {
   step: number
   total: number
   stepKey: (typeof STEPS)[number]
+  /** The keys of the displayed steps, in display order. Length === `total`. */
+  stepKeys: readonly StepKey[]
+  /** Jump to displayed step `i`. Used to rewind from Review back to any earlier step. */
+  onJump: (displayedIndex: number) => void
 }) {
   return (
     <div className="mb-6">
@@ -287,15 +318,26 @@ function ProgressRail({
         </span>
       </div>
       <div className="flex gap-1">
-        {Array.from({ length: total }).map((_, i) => (
-          <span
-            key={i}
+        {stepKeys.map((k, i) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onJump(i)}
+            aria-label={`Jump to ${STEP_LABELS[k]} step`}
+            aria-current={i === step ? 'step' : undefined}
             className={cn(
-              'h-[3px] flex-1 rounded-full transition-colors duration-300',
-              i <= step ? 'bg-foreground' : 'bg-secondary',
+              'group relative h-[14px] flex-1 cursor-pointer rounded-full',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             )}
-            aria-hidden
-          />
+          >
+            <span
+              className={cn(
+                'block h-[3px] w-full rounded-full transition-colors duration-300',
+                i <= step ? 'bg-foreground' : 'bg-secondary group-hover:bg-foreground/40',
+              )}
+              aria-hidden
+            />
+          </button>
         ))}
       </div>
     </div>
@@ -900,7 +942,7 @@ function ReviewStep({
         Looks right?
       </h1>
       <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-muted-foreground">
-        Save and start ranking — we&apos;ll use these to rank listings live.
+        Save and start ranking. We&apos;ll use these to rank listings live.
         Edit anytime in <code className="rounded bg-secondary px-1.5 py-0.5 text-[12px]">src/profiles/</code>.
       </p>
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -968,7 +1010,7 @@ function ProfileSummaryCard({ profile: p }: { profile: WizardProfile }) {
         />
         <SummaryRow
           label="Beds"
-          value={p.beds.length > 0 ? p.beds.join(' · ') : '—'}
+          value={p.beds.length > 0 ? p.beds.join(' · ') : '·'}
         />
         <SummaryRow
           label="Must-haves"

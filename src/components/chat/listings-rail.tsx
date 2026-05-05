@@ -59,7 +59,7 @@ function RailEmpty() {
   return (
     <div className="grid h-full place-items-center px-4 py-12 text-center">
       <p className="max-w-[14rem] text-[12.5px] leading-relaxed text-muted-foreground">
-        Listings mentioned in this chat show up here.
+        Listings the assistant looks up show up here.
       </p>
     </div>
   )

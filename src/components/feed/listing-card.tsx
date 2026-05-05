@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowUpRight, MapPin, Phone, Mail } from 'lucide-react'
 import type { RankedListing } from '@/types'
 import { ScoreBadge } from '@/components/score/score-badge'
+import { SaveButton } from '@/components/saved/save-button'
 import {
   formatBeds,
   formatFreshness,
@@ -23,6 +24,8 @@ export function ListingCard({
   listing,
   variant = 'compact',
   currentProfileHash = '',
+  defaultSaver,
+  initialSaved = false,
 }: {
   listing: RankedListing
   variant?: ListingCardVariant
@@ -32,6 +35,13 @@ export function ListingCard({
    * tell the user we're recomputing top picks against their new profile.
    */
   currentProfileHash?: string
+  /**
+   * Saver slug used to wire the heart on the card. Sourced from
+   * `getKnownSavers()[0]` server-side. When omitted, the heart is hidden.
+   */
+  defaultSaver?: string
+  /** Whether this listing is already saved by `defaultSaver`. */
+  initialSaved?: boolean
 }) {
   const photo = listing.photos?.[0]
   const vibes = topVibes(listing.vibe, variant === 'compact' ? 2 : 3)
@@ -61,11 +71,35 @@ export function ListingCard({
       )}
     >
       {variant === 'featured' ? (
-        <FeaturedCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
+        <FeaturedCard
+          listing={listing}
+          photo={photo}
+          vibes={vibes}
+          score={score}
+          stale={stale}
+          defaultSaver={defaultSaver}
+          initialSaved={initialSaved}
+        />
       ) : variant === 'wide' ? (
-        <WideCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
+        <WideCard
+          listing={listing}
+          photo={photo}
+          vibes={vibes}
+          score={score}
+          stale={stale}
+          defaultSaver={defaultSaver}
+          initialSaved={initialSaved}
+        />
       ) : (
-        <CompactCard listing={listing} photo={photo} vibes={vibes} score={score} stale={stale} />
+        <CompactCard
+          listing={listing}
+          photo={photo}
+          vibes={vibes}
+          score={score}
+          stale={stale}
+          defaultSaver={defaultSaver}
+          initialSaved={initialSaved}
+        />
       )}
     </Link>
   )
@@ -79,12 +113,16 @@ function FeaturedCard({
   vibes,
   score,
   stale,
+  defaultSaver,
+  initialSaved,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
   stale: boolean
+  defaultSaver?: string
+  initialSaved: boolean
 }) {
   return (
     <div className="relative flex h-full w-full flex-col">
@@ -101,7 +139,16 @@ function FeaturedCard({
           <PhotoMissing />
         )}
         <div className="photo-overlay pointer-events-none absolute inset-0" />
-        <div className="absolute right-4 top-4">
+        <div className="absolute right-4 top-4 flex items-center gap-2">
+          {defaultSaver ? (
+            <SaveButton
+              listing_id={listing.id}
+              saved_by={defaultSaver}
+              initial={initialSaved}
+              variant="onPhoto"
+              compact
+            />
+          ) : null}
           <RescoringWrap stale={stale} size="xl">
             <ScoreBadge score={score} size="xl" />
           </RescoringWrap>
@@ -141,12 +188,16 @@ function WideCard({
   vibes,
   score,
   stale,
+  defaultSaver,
+  initialSaved,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
   stale: boolean
+  defaultSaver?: string
+  initialSaved: boolean
 }) {
   return (
     <div className="relative flex h-full w-full">
@@ -162,7 +213,16 @@ function WideCard({
         ) : (
           <PhotoMissing />
         )}
-        <div className="absolute right-2 top-2">
+        <div className="absolute right-2 top-2 flex items-center gap-1.5">
+          {defaultSaver ? (
+            <SaveButton
+              listing_id={listing.id}
+              saved_by={defaultSaver}
+              initial={initialSaved}
+              variant="onPhoto"
+              compact
+            />
+          ) : null}
           <RescoringWrap stale={stale} size="md">
             <ScoreBadge score={score} size="md" />
           </RescoringWrap>
@@ -195,12 +255,16 @@ function CompactCard({
   vibes,
   score,
   stale,
+  defaultSaver,
+  initialSaved,
 }: {
   listing: RankedListing
   photo?: string
   vibes: string[]
   score: number
   stale: boolean
+  defaultSaver?: string
+  initialSaved: boolean
 }) {
   return (
     <div className="relative flex h-full w-full flex-col">
@@ -216,7 +280,16 @@ function CompactCard({
         ) : (
           <PhotoMissing />
         )}
-        <div className="absolute right-2.5 top-2.5">
+        <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5">
+          {defaultSaver ? (
+            <SaveButton
+              listing_id={listing.id}
+              saved_by={defaultSaver}
+              initial={initialSaved}
+              variant="onPhoto"
+              compact
+            />
+          ) : null}
           <RescoringWrap stale={stale} size="md">
             <ScoreBadge score={score} size="md" />
           </RescoringWrap>

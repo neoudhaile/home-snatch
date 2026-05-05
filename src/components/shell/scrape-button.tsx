@@ -72,7 +72,7 @@ export function ScrapeButton() {
         const ago = Date.now() - parseInt(last, 10)
         if (Number.isFinite(ago) && ago < DEBOUNCE_MS) {
           const wait = Math.ceil((DEBOUNCE_MS - ago) / 1000)
-          toast.message(`Easy — try again in ${wait}s.`)
+          toast.message(`Easy. Try again in ${wait}s.`)
           return
         }
       }
@@ -120,7 +120,7 @@ export function ScrapeButton() {
         const hitLabels = hits.map(([k, n]) => `${SOURCE_LABELS[k] ?? k}: ${n}`).join(', ')
         toast.success(
           `Found ${data.ingested} listing${data.ingested === 1 ? '' : 's'}${
-            hitLabels ? ` — ${hitLabels}` : ''
+            hitLabels ? `: ${hitLabels}` : ''
           }.`,
           { id: toastId },
         )

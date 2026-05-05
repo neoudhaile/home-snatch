@@ -86,26 +86,110 @@ function isProfileReady(p: ProfileFile): boolean {
 
 /**
  * SHA-256 of a stable string, truncated to 16 hex chars. Stable means: sorted
- * by slug, sorted lists, sorted vibe keys. Same profiles -> same hash, period.
+ * by slug, sorted lists, sorted vibe keys + values, every ranking-affecting
+ * field included. Same profiles -> same hash, period.
+ *
+ * Hashes EVERY field that affects ranking so that any meaningful edit (vibe
+ * value change, preferred_areas tweak, commute target adjustment, etc.) flips
+ * the hash and triggers a rescore on the next save.
  */
 export function hashProfileSet(profiles: ProfileFile[]): string {
-  const sorted = [...profiles].sort((a, b) => a.slug.localeCompare(b.slug))
-  const parts: string[] = []
-  for (const p of sorted) {
-    const must = [...(p.must_have ?? [])].sort()
-    const breakers = [...(p.deal_breakers ?? [])].sort()
-    const vibeKeys = Object.keys(p.vibes ?? {}).sort()
-    parts.push(
-      [
-        p.slug,
-        String(p.budget_max ?? ''),
-        must.join('|'),
-        breakers.join('|'),
-        vibeKeys.join('|'),
-      ].join('::')
+  const stableJson = profiles
+    .slice()
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+    .map((p) =>
+      JSON.stringify({
+        slug: p.slug,
+        budget_min: p.budget_min ?? null,
+        budget_max: p.budget_max ?? null,
+        beds_min: p.beds_min ?? null,
+        beds_max: p.beds_max ?? null,
+        must_have: [...(p.must_have ?? [])].sort(),
+        nice_to_have: [...(p.nice_to_have ?? [])].sort(),
+        deal_breakers: [...(p.deal_breakers ?? [])].sort(),
+        vibes: Object.fromEntries(
+          Object.entries(p.vibes ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+        ),
+        preferred_areas: [...(p.preferred_areas ?? [])].sort(),
+        commute: (p.commute ?? [])
+          .map((c) => ({ to: c.to ?? '', max_minutes: c.max_minutes ?? null }))
+          .sort((a, b) => a.to.localeCompare(b.to)),
+      }),
     )
+    .join('|')
+  return createHash('sha256').update(stableJson).digest('hex').slice(0, 16)
+}
+
+/**
+ * Read profiles from the `profiles` DB table and normalize to the in-memory
+ * ProfileFile shape every consumer expects. Returns `null` on hard failure
+ * (no DATABASE_URL, query throws). Returns `[]` if the table exists but is
+ * empty — callers treat both empty-table and hard-fail as "fall back to
+ * JSON files".
+ *
+ * Drizzle returns `numeric()` columns as `string`; we coerce to number.
+ */
+async function _loadFromDbUncached(): Promise<ProfileFile[] | null> {
+  if (!process.env.DATABASE_URL) return null
+  try {
+    // Lazy import so unit-tests / build-time code paths that never touch the
+    // DB don't pay the cost of constructing the connection pool.
+    const { getDb } = await import('@/lib/db')
+    const { profiles: profilesTable } = await import('@/db/schema')
+    const db = getDb()
+    const rows = await db.select().from(profilesTable)
+    const out: ProfileFile[] = []
+    for (const r of rows) {
+      const pf: ProfileFile = {
+        slug: r.slug,
+        name: r.name,
+        budget_min: r.budget_min ?? null,
+        budget_max: r.budget_max ?? null,
+        beds_min: r.beds_min != null ? Number(r.beds_min) : null,
+        beds_max: r.beds_max != null ? Number(r.beds_max) : null,
+        must_have: (r.must_have ?? []) as string[],
+        nice_to_have: (r.nice_to_have ?? []) as string[],
+        deal_breakers: (r.deal_breakers ?? []) as string[],
+        vibes: (r.vibes ?? {}) as Record<string, number | null>,
+        commute: ((r.commute ?? []) as Array<{
+          to?: string | null
+          lat?: number | null
+          lng?: number | null
+          max_minutes?: number | null
+          modes?: ('subway' | 'walk' | 'bike')[]
+        }>).map((c) => ({
+          to: c.to ?? null,
+          lat: c.lat ?? null,
+          lng: c.lng ?? null,
+          max_minutes: c.max_minutes ?? null,
+          modes: c.modes ?? undefined,
+        })),
+        preferred_areas: (r.preferred_areas ?? []) as string[],
+        notes: r.notes ?? null,
+      }
+      out.push(pf)
+    }
+    out.sort((a, b) => a.slug.localeCompare(b.slug))
+    return out
+  } catch (err) {
+    console.warn('[profile-set] DB load failed, will fall back to files:', (err as Error).message)
+    return null
   }
-  return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16)
+}
+
+// In-memory cache of parsed profile rows (from DB). Same 60s TTL as the file
+// cache. Keyed by a sentinel string since DB has no per-directory parameter.
+type DbCacheEntry = { at: number; data: ProfileFile[] | null }
+const _profileDbCache = new Map<string, DbCacheEntry>()
+const DB_CACHE_KEY = '__db__'
+
+async function loadFromDb(): Promise<ProfileFile[] | null> {
+  const now = Date.now()
+  const hit = _profileDbCache.get(DB_CACHE_KEY)
+  if (hit && now - hit.at < PROFILE_CACHE_TTL_MS) return hit.data
+  const data = await _loadFromDbUncached()
+  _profileDbCache.set(DB_CACHE_KEY, { at: now, data })
+  return data
 }
 
 /**
@@ -114,9 +198,8 @@ export function hashProfileSet(profiles: ProfileFile[]): string {
  * dropped with a console.warn — we never mix half-filled profiles into the
  * joint constraints, that path leads to silent garbage.
  *
- * Reuses the cached output of `loadAllProfileFiles` (60s TTL) and filters
- * for ready profiles in-process. Saves the FS round trips on every score
- * batch + every chat call.
+ * DB-first: tries the `profiles` table first; falls back to JSON files when
+ * the table is empty or unavailable. Used by scoring + chat tooling.
  */
 export async function loadProfilesFromJson(
   profilesDir = join(process.cwd(), 'src', 'profiles')
@@ -172,17 +255,7 @@ async function _loadAllProfileFilesUncached(profilesDir: string): Promise<Profil
   return out
 }
 
-/**
- * Read every JSON file under src/profiles/, validate, and return the parsed
- * profiles regardless of whether they're "ready" (FILL_ME tolerated). This is
- * the canonical list of *known* profile slugs/names — the one referenced by
- * the saver/UI surface so a half-filled profile still shows up as a saver.
- *
- * Server-side only; uses fs. Cached in-process for 60 seconds.
- */
-export async function loadAllProfileFiles(
-  profilesDir = join(process.cwd(), 'src', 'profiles')
-): Promise<ProfileFile[]> {
+async function _loadFromFiles(profilesDir: string): Promise<ProfileFile[]> {
   const now = Date.now()
   const hit = _profileFileCache.get(profilesDir)
   if (hit && now - hit.at < PROFILE_CACHE_TTL_MS) return hit.data
@@ -192,16 +265,39 @@ export async function loadAllProfileFiles(
 }
 
 /**
- * Force-reload profiles from disk on next call. Useful when you've just
- * written a profile file and want subsequent reads to see it without the
- * 60-second wait.
+ * Canonical loader: returns every known profile, regardless of "ready" state.
+ * This is the canonical list of *known* profile slugs/names — the one
+ * referenced by the saver/UI surface so a half-filled profile still shows up
+ * as a saver.
+ *
+ * DB-first behavior:
+ *   1. Try the `profiles` table. If ≥1 row, return those (normalized).
+ *   2. If 0 rows OR DB error: fall back to JSON files under `src/profiles/`.
+ *      Useful for fresh installs and read-only build artifacts on Vercel
+ *      where the JSONs are baked into the build but the wizard writes the DB.
+ *
+ * Both paths are cached in-process for 60s. Server-side only; uses fs + DB.
  */
-export function clearProfileFileCache(): void {
-  _profileFileCache.clear()
+export async function loadAllProfileFiles(
+  profilesDir = join(process.cwd(), 'src', 'profiles')
+): Promise<ProfileFile[]> {
+  const fromDb = await loadFromDb()
+  if (fromDb && fromDb.length > 0) return fromDb
+  return _loadFromFiles(profilesDir)
 }
 
 /**
- * Known saver slugs, derived from the JSON filenames in src/profiles/.
+ * Force-reload profiles from disk + DB on next call. Clears BOTH caches. Used
+ * after the wizard writes a new profile so subsequent reads reflect the
+ * change without the 60-second wait.
+ */
+export function clearProfileFileCache(): void {
+  _profileFileCache.clear()
+  _profileDbCache.clear()
+}
+
+/**
+ * Known saver slugs, derived from the merged DB-or-files set.
  * Server-side only.
  */
 export async function getKnownSavers(

@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { ArrowLeft, ArrowRight, LoaderCircle } from 'lucide-react'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ListingCard } from '@/components/feed/listing-card'
@@ -51,10 +50,11 @@ export default function AddPage() {
     }
   }
 
-  function save() {
-    if (!preview) return
-    toast.success('Saved to feed')
-    router.push('/')
+  function reset() {
+    setStatus('idle')
+    setPreview(null)
+    setUrl('')
+    setError(null)
   }
 
   return (
@@ -135,29 +135,26 @@ export default function AddPage() {
           {status === 'ready' && preview ? (
             <div className="space-y-3">
               <p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-                Extracted preview
+                Added to your feed
               </p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,420px)]">
                 <ListingCard listing={preview} variant="compact" />
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <Button
-                  onClick={save}
+                  onClick={() => router.push(`/listing/${preview.id}`)}
                   className="h-9 cursor-pointer rounded-full px-4 text-[13px]"
                 >
-                  Save to feed
+                  Open in feed
+                  <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                 </Button>
-                <Button
-                  onClick={() => {
-                    setStatus('idle')
-                    setPreview(null)
-                    setUrl('')
-                  }}
-                  variant="ghost"
-                  className="h-9 cursor-pointer rounded-full px-4 text-[13px]"
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="cursor-pointer text-[12.5px] text-muted-foreground underline-offset-[3px] transition-colors hover:text-foreground hover:underline"
                 >
-                  Discard
-                </Button>
+                  Add another
+                </button>
               </div>
             </div>
           ) : null}

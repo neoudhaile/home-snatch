@@ -42,6 +42,28 @@ export function SavedCard({ listing, savedBy, allSavers, selected, onToggleSelec
   const score = listing.score?.score ?? 0
   const isStale = (listing.freshness_hours ?? 0) > 7 * 24
 
+  /**
+   * Re-POST a save for every saver we just removed. Used by the Undo action
+   * on the success toast so a misclick on the X is a one-tap fix.
+   */
+  function restore(targets: Saver[]) {
+    setHidden(false)
+    void (async () => {
+      try {
+        for (const s of targets) {
+          await fetch('/api/save', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ listing_id: listing.id, saved_by: s }),
+          })
+        }
+        toast.success('Restored.')
+      } catch {
+        toast.error('Could not restore.')
+      }
+    })()
+  }
+
   function remove(e: React.MouseEvent) {
     e.preventDefault()
     e.stopPropagation()
@@ -58,7 +80,12 @@ export function SavedCard({ listing, savedBy, allSavers, selected, onToggleSelec
           })
           if (!res.ok) throw new Error(`unsave failed: ${res.status}`)
         }
-        toast.success('Removed.')
+        toast.success('Removed.', {
+          action: {
+            label: 'Undo',
+            onClick: () => restore(targets),
+          },
+        })
       } catch (err) {
         setHidden(false)
         toast.error(err instanceof Error ? err.message : 'Remove failed.')

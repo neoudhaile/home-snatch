@@ -15,13 +15,23 @@ import { z } from 'zod'
 import { sql } from 'drizzle-orm'
 import { revalidateTag } from 'next/cache'
 import { after } from 'next/server'
-import { profiles, listings as listingsTable, scores as scoresTable } from '@/db/schema'
+import {
+  profiles,
+  listings as listingsTable,
+  scores as scoresTable,
+  subway_stations,
+} from '@/db/schema'
 import { getDb } from '@/lib/db'
 import { loadAllProfileFiles, clearProfileFileCache } from '@/lib/profile-set'
 import { scoreListings } from '@/agents/score'
+import type { SubwayStation } from '@/types'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+// Background rescore via after() needs the full Vercel Pro budget (5 min). A
+// fresh-DB rescore of ~500 listings has measured at 5–10 min total; without
+// this the lambda gets killed mid-flight on the platform default.
+export const maxDuration = 300
 
 const commuteEntrySchema = z.object({
   to: z.string(),
@@ -182,11 +192,14 @@ export async function POST(req: Request) {
         if (allListings.length === 0) return
         const freshProfiles = await loadAllProfileFiles()
         if (freshProfiles.length === 0) return
+        // Pull subway stations once so the commute scorer isn't running
+        // degraded with stations=[]. Same set used by /api/admin/dq runRescore.
+        const stations = (await db.select().from(subway_stations)) as SubwayStation[]
         const out = await scoreListings(allListings, {
           profilesOverride: freshProfiles,
           hpdByListingId: new Map(),
           rentStabByListingId: new Map(),
-          stations: [],
+          stations,
           skipAlreadyScored: true,
         })
         for (const s of out) {

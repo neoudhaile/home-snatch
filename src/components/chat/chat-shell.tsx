@@ -245,6 +245,16 @@ export function ChatShell({ defaultSaver }: { defaultSaver?: string } = {}) {
   )
 
   function clearAll() {
+    // Soft confirm once the conversation has any real content. Three
+    // messages is roughly "user question, assistant answer, follow-up" — at
+    // that point a silent wipe is jarring.
+    if (messages.length > 3) {
+      const ok =
+        typeof window === 'undefined'
+          ? true
+          : window.confirm('Clear this conversation and start over?')
+      if (!ok) return
+    }
     abortRef.current?.abort()
     setMessages([])
     setLiveText('')

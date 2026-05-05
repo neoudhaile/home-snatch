@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import {
   getSavedFor,
   getSavedIntersection,
+  getTotalSavedCount,
 } from '@/lib/save-state'
 import { loadAllProfileFiles } from '@/lib/profile-set'
 import { SavedShell } from '@/components/saved/saved-shell'
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 
 export default async function SavedPage() {
   // Source the saver list dynamically from the profile JSONs so adding a new
-  // profile file is enough — no code change needed in this page.
+  // profile file is enough. No code change needed in this page.
   const profiles = await loadAllProfileFiles()
   const both = await getSavedIntersection()
   const inSet = new Set(both.map((l) => l.id))
@@ -30,9 +31,11 @@ export default async function SavedPage() {
       }),
     )
 
+  const savedCount = await getTotalSavedCount().catch(() => 0)
+
   return (
     <>
-      <SavedHeaderBar />
+      <SavedHeaderBar savedCount={savedCount} />
       <main className="mx-auto w-full max-w-[1280px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
         <SavedShell both={both} bySaver={bySaver} />
       </main>

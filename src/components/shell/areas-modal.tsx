@@ -142,14 +142,56 @@ export function AreasModal({ trigger }: { trigger: ReactNode }) {
         .map((c) => resolveNeighborhood(c)?.display)
         .filter((s): s is string => typeof s === 'string')
 
+      // Fetch the existing profile so we can merge — POST /api/profile is a
+      // full UPSERT and a partial body would null out budget/vibes/must_have.
+      // Match the wizard's pattern (full body on save).
+      const existingRes = await fetch(`/api/profile/${encodeURIComponent(profile.slug)}`)
+      let existing: Record<string, unknown> | null = null
+      if (existingRes.ok) {
+        const j = (await existingRes.json()) as { profile?: Record<string, unknown> }
+        existing = j.profile ?? null
+      } else if (existingRes.status !== 404) {
+        const j = (await existingRes.json().catch(() => ({}))) as { message?: string }
+        throw new Error(
+          j.message ?? `Could not load existing profile (HTTP ${existingRes.status})`,
+        )
+      }
+
+      // Numeric beds_min/beds_max come back from /api/profile/[slug] as strings
+      // (Drizzle numeric() column). Coerce so they round-trip through the body
+      // schema (which expects number | null | undefined).
+      const numOrNull = (v: unknown): number | null => {
+        if (v == null) return null
+        if (typeof v === 'number') return v
+        if (typeof v === 'string' && v !== '' && !Number.isNaN(Number(v))) return Number(v)
+        return null
+      }
+
       const body = {
         profiles: [
           {
-            // /api/profile validates slug + name. Forward the loaded slug + name,
-            // overwrite preferred_areas. The endpoint upserts.
             slug: profile.slug,
-            name: profile.name,
+            name: (existing?.name as string | undefined) ?? profile.name,
+            budget_min: existing ? numOrNull(existing.budget_min) : null,
+            budget_max: existing ? numOrNull(existing.budget_max) : null,
+            beds_min: existing ? numOrNull(existing.beds_min) : null,
+            beds_max: existing ? numOrNull(existing.beds_max) : null,
+            must_have: (existing?.must_have as string[] | undefined) ?? [],
+            nice_to_have: (existing?.nice_to_have as string[] | undefined) ?? [],
+            deal_breakers: (existing?.deal_breakers as string[] | undefined) ?? [],
+            vibes:
+              (existing?.vibes as Record<string, number> | undefined) ?? {},
+            commute:
+              (existing?.commute as Array<{
+                to: string
+                lat?: number | null
+                lng?: number | null
+                max_minutes: number
+                modes: ('subway' | 'walk' | 'bike')[]
+              }> | undefined) ?? [],
+            // The merge: only preferred_areas is overwritten by the modal.
             preferred_areas: display,
+            notes: (existing?.notes as string | null | undefined) ?? null,
           },
         ],
       }

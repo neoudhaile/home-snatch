@@ -2,7 +2,10 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft, MapPin, Train } from 'lucide-react'
 import { getListing } from '@/lib/feed-data'
+import { getKnownSavers } from '@/lib/profile-set'
+import { getSaveStateForListings } from '@/lib/save-state'
 import { ScoreBadge } from '@/components/score/score-badge'
+import { SaveButton } from '@/components/saved/save-button'
 import { PhotoGallery } from '@/components/listing/photo-gallery'
 import { ContactCard, SectionCard } from '@/components/listing/contact-card'
 import { ApplicationCard } from '@/components/listing/application-card'
@@ -30,6 +33,19 @@ export default async function ListingDetailPage({ params }: Props) {
   const score = listing.score?.score ?? 0
   const facts =
     (listing.score?.rationale_jsonb as { top_facts?: string[] } | null)?.top_facts ?? []
+
+  // Default saver wires the heart in the header strip. First slug in the
+  // profile set wins; multi-saver picker is a follow-up.
+  const savers = await getKnownSavers().catch(() => [])
+  const defaultSaver = savers[0]
+  const saveState = defaultSaver
+    ? await getSaveStateForListings([listing.id]).catch(
+        () => ({}) as Record<string, string[]>,
+      )
+    : ({} as Record<string, string[]>)
+  const initialSaved = !!(
+    defaultSaver && saveState[listing.id]?.includes(defaultSaver)
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -84,6 +100,13 @@ export default async function ListingDetailPage({ params }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-3 md:justify-end">
+            {defaultSaver ? (
+              <SaveButton
+                listing_id={listing.id}
+                saved_by={defaultSaver}
+                initial={initialSaved}
+              />
+            ) : null}
             <ScoreBadge score={score} size="xl" />
           </div>
         </header>

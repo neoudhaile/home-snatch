@@ -59,6 +59,15 @@ export default function AdminPage() {
             <ActionButton action="rescore" description="Score listings missing a current rationale.">
               Rescore
             </ActionButton>
+            <ActionButton
+              action="rescore"
+              variant="secondary"
+              force
+              description="Re-score every active listing, ignoring the per-hash cache. Costs LLM tokens."
+              confirm="Force rescore every active listing? This re-runs Sonnet 4.6 on the full set and burns tokens — only do it if a profile change isn't reflected in the feed."
+            >
+              Force rescore
+            </ActionButton>
             <ActionButton action="recompute-vibes" description="Recompute NTA vibe scores.">
               Recompute vibes
             </ActionButton>

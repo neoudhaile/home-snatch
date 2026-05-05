@@ -1,7 +1,11 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { getListing } from '@/lib/feed-data'
-import { getCommuteTargets, getSaversByListing } from '@/lib/save-state'
+import {
+  getCommuteTargets,
+  getSaversByListing,
+  getTotalSavedCount,
+} from '@/lib/save-state'
 import { getProfileNames } from '@/lib/profile-set'
 import { CompareTable } from '@/components/compare/compare-table'
 import { SavedHeaderBar } from '@/components/saved/page-header'
@@ -27,15 +31,17 @@ export default async function ComparePage({ searchParams }: { searchParams: Sear
     if (found) listings.push(found)
   }
 
-  const [saversByListing, commuteTargets, profileNames] = await Promise.all([
-    getSaversByListing(listings.map((l) => l.id)),
-    getCommuteTargets(),
-    getProfileNames(),
-  ])
+  const [saversByListing, commuteTargets, profileNames, savedCount] =
+    await Promise.all([
+      getSaversByListing(listings.map((l) => l.id)),
+      getCommuteTargets(),
+      getProfileNames(),
+      getTotalSavedCount().catch(() => 0),
+    ])
 
   return (
     <>
-      <SavedHeaderBar title="Compare" />
+      <SavedHeaderBar title="Compare" savedCount={savedCount} />
       <main className="mx-auto w-full max-w-[1480px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
         {ids.length === 0 ? (
           <NothingPicked />

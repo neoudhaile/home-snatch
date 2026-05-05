@@ -15,6 +15,7 @@
 import { z } from 'zod'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { revalidateTag } from 'next/cache'
+import { after } from 'next/server'
 import { listings, scores, subway_stations } from '@/db/schema'
 import { getDb } from '@/lib/db'
 import { getDqMetrics } from '@/lib/data-quality'
@@ -27,6 +28,7 @@ import {
   loadProfilesFromJson,
 } from '@/lib/profile-set'
 import { fetchAllSources } from '@/scrapers'
+import { chainRescoreAfter } from '@/lib/rescore-helper'
 import type { Listing, SubwayStation } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -35,6 +37,11 @@ export const maxDuration = 300
 
 const Body = z.object({
   action: z.enum(['dedupe', 'scrape', 'refresh', 'rescore', 'recompute-vibes']),
+  // When `force: true` is paired with action: 'rescore', the score agent
+  // ignores the per-hash cache and re-scores every active listing. Useful as
+  // an escape hatch for "I changed something the hash didn't catch" though
+  // P0 #3 (full-field hash) makes this much rarer.
+  force: z.boolean().optional(),
 })
 
 function authorized(req: Request): boolean {
@@ -84,7 +91,19 @@ export async function POST(req: Request) {
     case 'scrape': {
       const r = await runScrape()
       bust()
-      return Response.json(r)
+      // Chain a background rescore over the just-ingested rows. Without this
+      // the admin "Run scrape now" button left fresh listings unscored until
+      // the next GH Actions tick.
+      if (r.ingested_ids.length > 0) {
+        after(() => chainRescoreAfter(r.ingested_ids))
+      }
+      // Don't expose the raw id list in the response — keep the same shape
+      // the action button has been displaying.
+      return Response.json({
+        ingested: r.ingested,
+        deactivated: r.deactivated,
+        sources: r.sources,
+      })
     }
     case 'refresh': {
       const r = await refreshStaleListings()
@@ -92,7 +111,7 @@ export async function POST(req: Request) {
       return Response.json(r)
     }
     case 'rescore': {
-      const r = await runRescore()
+      const r = await runRescore({ force: body.force === true })
       bust()
       return Response.json(r)
     }
@@ -117,12 +136,14 @@ export async function POST(req: Request) {
  */
 async function runScrape(): Promise<{
   ingested: number
+  ingested_ids: string[]
   deactivated: number
   sources: Partial<Record<string, number>>
 }> {
   const { listings: fresh, bySource } = await fetchAllSources()
   const db = getDb()
   let ingested = 0
+  const ingested_ids: string[] = []
   const CHUNK = 50
   for (let i = 0; i < fresh.length; i += CHUNK) {
     const batch = fresh.slice(i, i + CHUNK)
@@ -162,6 +183,7 @@ async function runScrape(): Promise<{
       })
       .returning({ id: listings.id })
     ingested += rows.length
+    for (const r of rows) ingested_ids.push(r.id)
   }
 
   const deactivated = await db
@@ -170,7 +192,7 @@ async function runScrape(): Promise<{
     .where(sql`${listings.is_active} = true AND ${listings.last_seen_at} < now() - interval '30 days'`)
     .returning({ id: listings.id })
 
-  return { ingested, deactivated: deactivated.length, sources: bySource }
+  return { ingested, ingested_ids, deactivated: deactivated.length, sources: bySource }
 }
 
 /**
@@ -180,30 +202,45 @@ async function runScrape(): Promise<{
  *
  * Note: this calls `scoreListings` from the scoring agent, which already
  * runs the full enrichment pipeline. We do not call `enrichListing` directly.
+ *
+ * `force=true` ignores the per-hash cache and rescores every active listing
+ * — used as the escape hatch from the admin "Force rescore" button when a
+ * profile change isn't reflected in the score (P0 #3 makes this rare but
+ * not impossible if scoring-formula or enrichment changes outside the hash).
  */
-async function runRescore(): Promise<{ scored: number; profile_set_hash: string }> {
+async function runRescore(
+  opts: { force?: boolean } = {},
+): Promise<{ scored: number; profile_set_hash: string; forced: boolean }> {
   const db = getDb()
   const profiles = await loadProfilesFromJson()
   if (profiles.length === 0) {
-    return { scored: 0, profile_set_hash: '' }
+    return { scored: 0, profile_set_hash: '', forced: !!opts.force }
   }
   const profileSetHash = hashProfileSet(profiles)
 
-  // Active listings that don't have a score row for this hash.
-  const candidates = (await db
-    .select()
-    .from(listings)
-    .leftJoin(
-      scores,
-      and(eq(scores.listing_id, listings.id), eq(scores.profile_set_hash, profileSetHash))
-    )
-    .where(and(eq(listings.is_active, true), isNull(scores.listing_id)))) as Array<{
-    listings: Listing
-  }>
-
-  const targetListings = candidates.map((c) => c.listings)
+  let targetListings: Listing[]
+  if (opts.force) {
+    // Force path: every active listing, regardless of existing score row.
+    targetListings = (await db
+      .select()
+      .from(listings)
+      .where(eq(listings.is_active, true))) as Listing[]
+  } else {
+    // Active listings that don't have a score row for this hash.
+    const candidates = (await db
+      .select()
+      .from(listings)
+      .leftJoin(
+        scores,
+        and(eq(scores.listing_id, listings.id), eq(scores.profile_set_hash, profileSetHash))
+      )
+      .where(and(eq(listings.is_active, true), isNull(scores.listing_id)))) as Array<{
+      listings: Listing
+    }>
+    targetListings = candidates.map((c) => c.listings)
+  }
   if (targetListings.length === 0) {
-    return { scored: 0, profile_set_hash: profileSetHash }
+    return { scored: 0, profile_set_hash: profileSetHash, forced: !!opts.force }
   }
 
   // Pre-resolve the lookup tables `scoreListings` expects.
@@ -220,10 +257,13 @@ async function runRescore(): Promise<{ scored: number; profile_set_hash: string 
     stations,
     hpdByListingId,
     rentStabByListingId,
+    // When forced, bypass the per-hash skip so every row is rescored even if
+    // it already has a score against the current hash.
+    skipAlreadyScored: !opts.force,
   })
 
   if (newScores.length === 0) {
-    return { scored: 0, profile_set_hash: profileSetHash }
+    return { scored: 0, profile_set_hash: profileSetHash, forced: !!opts.force }
   }
 
   // Upsert each score row.
@@ -243,5 +283,9 @@ async function runRescore(): Promise<{ scored: number; profile_set_hash: string 
       })
   }
 
-  return { scored: newScores.length, profile_set_hash: profileSetHash }
+  return {
+    scored: newScores.length,
+    profile_set_hash: profileSetHash,
+    forced: !!opts.force,
+  }
 }

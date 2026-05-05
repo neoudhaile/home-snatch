@@ -39,11 +39,14 @@ export function NewListingsPoller({ initialLatest }: { initialLatest: string | n
     let cancelled = false
 
     async function tick() {
+      // Skip while the tab is hidden. Saves bandwidth and avoids burning
+      // background CPU on a tab the user isn't looking at.
+      if (typeof document !== 'undefined' && document.hidden) return
       const since = sinceRef.current
       if (!since) return
       try {
         const res = await fetch(`/api/feed-since?since=${encodeURIComponent(since)}`, {
-          // Force a fresh fetch — Vercel's runtime won't dedupe poll responses
+          // Force a fresh fetch. Vercel's runtime won't dedupe poll responses
           // across the 60s interval, but the route itself is uncached so this
           // just keeps any future Cloudflare-style edge cache off our back.
           cache: 'no-store',
@@ -53,16 +56,31 @@ export function NewListingsPoller({ initialLatest }: { initialLatest: string | n
         if (cancelled) return
         if (typeof j.count === 'number') setCount(j.count)
       } catch {
-        // Network blip — keep silent and try again next interval.
+        // Network blip. Keep silent and try again next interval.
       }
     }
 
-    // Don't tick immediately on mount — the page already rendered with the
+    // Don't tick immediately on mount. The page already rendered with the
     // latest data, so a 0-count would be expected.
     const id = setInterval(tick, 60_000)
+
+    // Re-fire on tab focus so a user returning to a stale tab sees the
+    // accumulated activity right away rather than waiting a full minute.
+    function onVisibility() {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        void tick()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility)
+    }
+
     return () => {
       cancelled = true
       clearInterval(id)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
     }
   }, [])
 
@@ -84,13 +102,13 @@ export function NewListingsPoller({ initialLatest }: { initialLatest: string | n
           'pointer-events-auto inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-foreground px-4 text-[12.5px] font-medium text-background shadow-lg transition-opacity hover:opacity-90',
           'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-2',
         )}
-        aria-label={`${count} new listings — refresh feed`}
+        aria-label={`${count} new listings · refresh feed`}
       >
         <Sparkles className="h-3.5 w-3.5" aria-hidden />
         <span>
           +{count} new listing{count === 1 ? '' : 's'}
         </span>
-        <span className="text-background/70">— refresh feed</span>
+        <span className="text-background/70">· refresh feed</span>
       </button>
     </div>
   )

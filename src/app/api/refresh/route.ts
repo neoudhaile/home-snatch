@@ -17,6 +17,7 @@
 
 import { sql } from 'drizzle-orm'
 import { revalidateTag } from 'next/cache'
+import { after } from 'next/server'
 import type { NewListing, Source } from '@/types'
 import { listings as listingsTable } from '@/db/schema'
 import { getDb } from '@/lib/db'
@@ -24,6 +25,7 @@ import { fetchCraigslist } from '@/scrapers/craigslist'
 import { fetchReddit } from '@/scrapers/reddit'
 import { fetchListingsProject } from '@/scrapers/listings-project'
 import { logScrapeError } from '@/scrapers/_util'
+import { chainRescoreAfter } from '@/lib/rescore-helper'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -80,6 +82,7 @@ export async function POST() {
 
   const db = getDb()
   let ingested = 0
+  const ingestedIds: string[] = []
   // Smaller chunk than the cron route so we stay well under the 60s ceiling.
   const CHUNK = 50
   for (let i = 0; i < fresh.length; i += CHUNK) {
@@ -120,6 +123,13 @@ export async function POST() {
       })
       .returning({ id: listingsTable.id })
     ingested += rows.length
+    for (const r of rows) ingestedIds.push(r.id)
+  }
+
+  // Chain a background rescore — the manual "scrape now" used to dump fresh
+  // listings into the feed without scores, which surfaced as score-less cards.
+  if (ingestedIds.length > 0) {
+    after(() => chainRescoreAfter(ingestedIds))
   }
 
   // Bust the feed + dq caches so the next render reflects the upsert.

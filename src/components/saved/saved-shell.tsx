@@ -166,7 +166,11 @@ function SavedHeader({
         )}
       >
         <GitCompareArrows className="h-3.5 w-3.5" aria-hidden />
-        {canCompare ? `Compare ${selectedCount}` : 'Compare'}
+        {canCompare
+          ? `Compare ${selectedCount}`
+          : selectedCount === 1
+            ? 'Compare (need 1 more)'
+            : 'Compare'}
       </Link>
     </div>
   )

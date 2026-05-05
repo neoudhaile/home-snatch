@@ -13,9 +13,11 @@
 
 import { sql } from 'drizzle-orm'
 import { revalidateTag } from 'next/cache'
+import { after } from 'next/server'
 import { fetchAllSources } from '@/scrapers'
 import { getDb } from '@/lib/db'
 import { listings } from '@/db/schema'
+import { chainRescoreAfter } from '@/lib/rescore-helper'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -38,6 +40,7 @@ export async function GET(req: Request) {
 
   const db = getDb()
   let ingested = 0
+  const ingestedIds: string[] = []
   // Upsert in chunks to keep statement size manageable (jsonb columns are heavy).
   const CHUNK = 50
   for (let i = 0; i < fresh.length; i += CHUNK) {
@@ -78,6 +81,14 @@ export async function GET(req: Request) {
       })
       .returning({ id: listings.id })
     ingested += rows.length
+    for (const r of rows) ingestedIds.push(r.id)
+  }
+
+  // Chain rescore in the background so the cron response is fast but newly
+  // ingested rows get scored before the next GH Actions tick (which used to
+  // be the only path that ran rescore).
+  if (ingestedIds.length > 0) {
+    after(() => chainRescoreAfter(ingestedIds))
   }
 
   // Deactivate stale listings (not re-seen in 30+ days).

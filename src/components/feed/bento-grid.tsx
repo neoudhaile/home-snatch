@@ -15,9 +15,15 @@ import { ListingCard, type ListingCardVariant } from './listing-card'
 export function BentoGrid({
   listings,
   currentProfileHash = '',
+  defaultSaver,
+  savedIds,
 }: {
   listings: RankedListing[]
   currentProfileHash?: string
+  /** Saver slug used to wire the heart on each card (undefined → heart hidden). */
+  defaultSaver?: string
+  /** Set of listing IDs already saved by `defaultSaver`. */
+  savedIds?: Set<string>
 }) {
   const variants = assignVariants(listings.length)
 
@@ -29,6 +35,8 @@ export function BentoGrid({
           listing={l}
           variant={variants[i]}
           currentProfileHash={currentProfileHash}
+          defaultSaver={defaultSaver}
+          initialSaved={savedIds?.has(l.id) ?? false}
         />
       ))}
     </div>
@@ -37,6 +45,13 @@ export function BentoGrid({
 
 function assignVariants(n: number): ListingCardVariant[] {
   const out: ListingCardVariant[] = []
+  // When there are fewer than 4 listings, the asymmetric featured + wide
+  // pattern looks lopsided — render uniform compact tiles instead so the
+  // grid feels intentional rather than half-baked.
+  if (n < 4) {
+    for (let i = 0; i < n; i++) out.push('compact')
+    return out
+  }
   // Pattern per 8-card chunk:
   //   0: featured (2x2)
   //   1, 2: wide   (2x1)
