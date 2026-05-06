@@ -35,7 +35,11 @@ import { commuteEstimate, nearestStation } from '@/lib/subway'
 import { getVibeForLatLng } from '@/lib/nyc-vibes'
 import { geocodeNeighborhood } from '@/lib/geocode'
 import { getDb } from '@/lib/db'
-import { scores as scoresTable } from '@/db/schema'
+import {
+  listings as listingsTable,
+  scores as scoresTable,
+  score_batches as scoreBatchesTable,
+} from '@/db/schema'
 
 // ---------- types ----------
 
@@ -558,4 +562,260 @@ export async function scoreListings(
   )
 
   return scores.filter((s): s is NewScore => s != null)
+}
+
+// ---------- Batch API path (50% off Haiku list price) ----------
+
+/**
+ * Submit a Message Batch to Anthropic for the given listings against the
+ * current joint profile set. Returns the Anthropic batch_id (also persisted
+ * to `score_batches` so the cron poller can pick it up later).
+ *
+ * The cost story: Anthropic discounts batch requests 50%. Combined with the
+ * Sonnet→Haiku flip, the bulk-rescore lane is ~6× cheaper than the original.
+ *
+ * Trade-off: results land within Anthropic's batch SLA (typically minutes,
+ * up to 24h). The synchronous lane (`scoreListings`) still exists for the
+ * eager rescore on profile change — we use it for `preferred_areas` listings
+ * so the user sees their intent re-ranked immediately.
+ */
+export async function enqueueScoringBatch(args: {
+  listings: Listing[]
+  profiles: ProfileFile[]
+  joint: JointConstraints
+  profileSetHash: string
+  stations: SubwayStation[]
+  hpdByListingId: Map<string, number>
+  rentStabByListingId: Map<string, boolean>
+  enrichmentConcurrency?: number
+}): Promise<{ batch_id: string; submitted: number; skipped_prematch: number }> {
+  const {
+    listings,
+    profiles,
+    joint,
+    profileSetHash,
+    stations,
+    hpdByListingId,
+    rentStabByListingId,
+  } = args
+  if (listings.length === 0) {
+    throw new Error('[score] enqueueScoringBatch called with empty listings')
+  }
+
+  // 1. prematch — same gate as scoreListings, so the batch doesn't pay
+  //    Anthropic to "score" listings the rule layer already failed.
+  const survivors: Listing[] = []
+  for (const listing of listings) {
+    const pm = prematchListing(listing, joint)
+    if (pm.decision === 'fail') continue
+    survivors.push(listing)
+  }
+  const skipped_prematch = listings.length - survivors.length
+
+  // 2. enrich (concurrent) — same as scoreListings.
+  const enrichLimit = pLimit(args.enrichmentConcurrency ?? 5)
+  const enrichments = await Promise.all(
+    survivors.map((listing) =>
+      enrichLimit(() =>
+        enrichListing({
+          listing,
+          joint,
+          stations,
+          hpdCount: hpdByListingId.get(listing.id) ?? 0,
+          rentStabilized: rentStabByListingId.get(listing.id) ?? false,
+        }),
+      ),
+    ),
+  )
+
+  // 3. build batch requests. custom_id = listing_id so we can match results
+  //    to listings (and re-derive enrichment if needed at consume time).
+  const system = buildSystemPrompt({
+    joint,
+    profiles: profiles.map(profileFileToProfilePartial),
+  })
+  const requests = survivors.map((listing, i) => ({
+    custom_id: listing.id,
+    params: {
+      model: MODELS.score,
+      max_tokens: 1024,
+      temperature: 0.2,
+      system: [
+        {
+          type: 'text' as const,
+          text: system,
+          cache_control: { type: 'ephemeral' as const },
+        },
+      ],
+      tools: [SCORE_TOOL],
+      tool_choice: { type: 'tool' as const, name: 'emit_score' },
+      messages: [
+        {
+          role: 'user' as const,
+          content: `Score this listing. Listing facts:\n\n${JSON.stringify(
+            listingFacts(listing, enrichments[i]),
+            null,
+            2,
+          )}`,
+        },
+      ],
+    },
+  }))
+
+  if (requests.length === 0) {
+    throw new Error('[score] every candidate listing failed prematch')
+  }
+
+  const client = getAnthropic()
+  // The SDK type infers `params` quite strictly — the exact-tool tool_choice
+  // shape we use is valid per the API but the inferred narrow type is fussy
+  // about it. Cast at the boundary.
+  const batch = await client.messages.batches.create({
+    requests: requests as unknown as Parameters<
+      typeof client.messages.batches.create
+    >[0]['requests'],
+  })
+
+  const db = getDb()
+  await db.insert(scoreBatchesTable).values({
+    batch_id: batch.id,
+    profile_set_hash: profileSetHash,
+    request_count: requests.length,
+  })
+
+  console.log(
+    `[score] batch enqueued: id=${batch.id}, requests=${requests.length}, skipped_prematch=${skipped_prematch}`,
+  )
+  return { batch_id: batch.id, submitted: requests.length, skipped_prematch }
+}
+
+/**
+ * Poll a single Anthropic Message Batch and merge results into `scores`.
+ * Re-enriches each listing at result time so we have a live view of HPD,
+ * rent-stabilization, vibe, and commute when populating rationale_jsonb.
+ *
+ * Returns counts so the cron handler can report progress + decide whether
+ * to mark the row complete.
+ */
+export async function consumeScoringBatch(args: {
+  batchRowId: string
+  batchId: string
+  profileSetHash: string
+  stations: SubwayStation[]
+  hpdByListingId: Map<string, number>
+  rentStabByListingId: Map<string, boolean>
+}): Promise<{
+  status: 'in_progress' | 'ended' | 'errored'
+  written: number
+  errors: number
+}> {
+  const client = getAnthropic()
+  const db = getDb()
+
+  const batch = await client.messages.batches.retrieve(args.batchId)
+  if (batch.processing_status === 'in_progress') {
+    return { status: 'in_progress', written: 0, errors: 0 }
+  }
+
+  // ended / canceled / errored → drain results.
+  let written = 0
+  let errors = 0
+
+  // Important: we re-derive enrichment for rationale_jsonb. Listing rows can
+  // be updated between enqueue + result time; pulling fresh keeps the score
+  // explanation honest.
+  const joint: JointConstraints = mergeProfileConstraints(await loadProfilesFromJson())
+
+  // Stream the JSONL results.
+  const results = await client.messages.batches.results(args.batchId)
+  for await (const r of results) {
+    if (!r.result || r.result.type !== 'succeeded') {
+      errors += 1
+      continue
+    }
+    const listingId = r.custom_id
+    const message = r.result.message
+    const toolBlock = message.content.find((b) => b.type === 'tool_use')
+    if (!toolBlock || toolBlock.type !== 'tool_use') {
+      errors += 1
+      continue
+    }
+    const out = toolBlock.input as ScoreToolOutput
+    if (
+      typeof out.score !== 'number' ||
+      typeof out.headline !== 'string' ||
+      !Array.isArray(out.top_facts)
+    ) {
+      errors += 1
+      continue
+    }
+
+    // Re-enrich: load the listing and run the same enrichment the synchronous
+    // path uses. Skip silently if the listing was deleted between enqueue and
+    // batch completion.
+    const [listing] = (await db
+      .select()
+      .from(listingsTable)
+      .where(eq(listingsTable.id, listingId))
+      .limit(1)) as Listing[]
+    if (!listing) {
+      errors += 1
+      continue
+    }
+    const enrichment = await enrichListing({
+      listing,
+      joint,
+      stations: args.stations,
+      hpdCount: args.hpdByListingId.get(listing.id) ?? 0,
+      rentStabilized: args.rentStabByListingId.get(listing.id) ?? false,
+    })
+
+    const score = Math.max(0, Math.min(100, Math.round(out.score)))
+    const headline = sanitize(out.headline)
+    const concerns = out.concerns ? sanitize(out.concerns) : null
+    const top_facts = out.top_facts.map(sanitize)
+
+    const row: NewScore = {
+      listing_id: listing.id,
+      profile_set_hash: args.profileSetHash,
+      score,
+      headline,
+      concerns,
+      rationale_jsonb: {
+        top_facts,
+        enrichment: {
+          nearest_subway: enrichment.nearest_subway,
+          commute_summary: enrichment.commute_summary,
+          vibe_name: enrichment.vibe?.nta_name ?? null,
+          hpd_count_12mo: enrichment.hpd_count_12mo,
+          rent_stabilized: enrichment.rent_stabilized,
+        },
+      },
+    }
+    await db
+      .insert(scoresTable)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [scoresTable.listing_id, scoresTable.profile_set_hash],
+        set: row,
+      })
+    written += 1
+  }
+
+  // Mark the batch row done.
+  await db
+    .update(scoreBatchesTable)
+    .set({
+      status: batch.processing_status === 'ended' ? 'ended' : 'errored',
+      result_count: written,
+      completed_at: new Date(),
+      error: errors > 0 ? `errors=${errors}` : null,
+    })
+    .where(eq(scoreBatchesTable.id, args.batchRowId))
+
+  return {
+    status: batch.processing_status === 'ended' ? 'ended' : 'errored',
+    written,
+    errors,
+  }
 }

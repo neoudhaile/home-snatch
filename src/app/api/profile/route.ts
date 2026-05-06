@@ -23,7 +23,12 @@ import {
 } from '@/db/schema'
 import { getDb } from '@/lib/db'
 import { loadAllProfileFiles, clearProfileFileCache } from '@/lib/profile-set'
-import { scoreListings } from '@/agents/score'
+import { scoreListings, enqueueScoringBatch } from '@/agents/score'
+import {
+  hashProfileSet,
+  mergeProfileConstraints,
+} from '@/lib/profile-set'
+import { expandToAliases } from '@/lib/neighborhoods'
 import type { SubwayStation } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -192,31 +197,106 @@ export async function POST(req: Request) {
         if (allListings.length === 0) return
         const freshProfiles = await loadAllProfileFiles()
         if (freshProfiles.length === 0) return
-        // Pull subway stations once so the commute scorer isn't running
-        // degraded with stations=[]. Same set used by /api/admin/dq runRescore.
+
+        const joint = mergeProfileConstraints(freshProfiles)
+        const profileSetHash = hashProfileSet(freshProfiles)
         const stations = (await db.select().from(subway_stations)) as SubwayStation[]
-        const out = await scoreListings(allListings, {
-          profilesOverride: freshProfiles,
-          hpdByListingId: new Map(),
-          rentStabByListingId: new Map(),
-          stations,
-          skipAlreadyScored: true,
-        })
-        for (const s of out) {
-          await db
-            .insert(scoresTable)
-            .values(s)
-            .onConflictDoUpdate({
-              target: [scoresTable.listing_id, scoresTable.profile_set_hash],
-              set: s,
+
+        // Split listings: eager (in any profile's preferred_areas — small,
+        // user-relevant) vs the rest (large, batch-friendly).
+        const aliasSet = new Set(
+          expandToAliases(joint.preferred_areas).map((s) => s.toLowerCase()),
+        )
+        const eager: typeof allListings = []
+        const rest: typeof allListings = []
+        for (const l of allListings) {
+          const n = (l.neighborhood ?? '').toLowerCase()
+          if (n && aliasSet.has(n)) eager.push(l)
+          else rest.push(l)
+        }
+        console.log(
+          `[api/profile] split: eager=${eager.length}, batch=${rest.length}`,
+        )
+
+        // Eager: synchronous Haiku scoring. Small set, user just edited their
+        // profile, they want to see preferred_areas re-ranked NOW. With the
+        // Sonnet→Haiku flip this is also cheap.
+        if (eager.length > 0) {
+          const out = await scoreListings(eager, {
+            profilesOverride: freshProfiles,
+            hpdByListingId: new Map(),
+            rentStabByListingId: new Map(),
+            stations,
+            skipAlreadyScored: false,
+          })
+          for (const s of out) {
+            await db
+              .insert(scoresTable)
+              .values(s)
+              .onConflictDoUpdate({
+                target: [scoresTable.listing_id, scoresTable.profile_set_hash],
+                set: s,
+              })
+          }
+          try {
+            revalidateTag('feed', 'max')
+          } catch {
+            /* ignore */
+          }
+          console.log(
+            `[api/profile] eager rescore wrote ${out.length} preferred-area scores`,
+          )
+        }
+
+        // Batch: enqueue everything else through Anthropic Batch API for the
+        // 50% discount. The /api/cron/batch-poll route harvests results and
+        // writes them into `scores` when the batch ends.
+        if (rest.length > 0) {
+          try {
+            const r = await enqueueScoringBatch({
+              listings: rest,
+              profiles: freshProfiles,
+              joint,
+              profileSetHash,
+              stations,
+              hpdByListingId: new Map(),
+              rentStabByListingId: new Map(),
             })
+            console.log(
+              `[api/profile] batch enqueued: id=${r.batch_id}, submitted=${r.submitted}`,
+            )
+          } catch (err) {
+            console.warn(
+              `[api/profile] batch enqueue failed, falling back to sync rescore: ${(err as Error).message}`,
+            )
+            // Fallback: synchronous rescore of the remainder. Keeps the user
+            // unblocked even if Anthropic Batch API is down.
+            const out = await scoreListings(rest, {
+              profilesOverride: freshProfiles,
+              hpdByListingId: new Map(),
+              rentStabByListingId: new Map(),
+              stations,
+              skipAlreadyScored: true,
+            })
+            for (const s of out) {
+              await db
+                .insert(scoresTable)
+                .values(s)
+                .onConflictDoUpdate({
+                  target: [scoresTable.listing_id, scoresTable.profile_set_hash],
+                  set: s,
+                })
+            }
+            try {
+              revalidateTag('feed', 'max')
+            } catch {
+              /* ignore */
+            }
+            console.log(
+              `[api/profile] fallback sync rescore wrote ${out.length} scores`,
+            )
+          }
         }
-        try {
-          revalidateTag('feed', 'max')
-        } catch {
-          /* ignore */
-        }
-        console.log(`[api/profile] background rescore wrote ${out.length} scores`)
       } catch (err) {
         console.error('[api/profile] background rescore failed', err)
       }

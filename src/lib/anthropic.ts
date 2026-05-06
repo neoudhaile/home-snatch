@@ -10,13 +10,13 @@ export function getAnthropic() {
   return _client
 }
 
-// Cost posture: default to Haiku 4.5 ($1/$5 per MTok). Sonnet 4.6 ($3/$15)
-// is reserved for `reason` — user-facing chat where conversational quality
-// matters most. Scoring + structured summaries are tool-use calls with
-// constrained outputs, where Haiku 4.5 matches Sonnet quality at 1/3 cost.
+// Cost posture: Haiku 4.5 ($1/$5 per MTok) everywhere. Haiku 4.5 is strong
+// enough for the chat/ranking workload here, and the structured tool_use we
+// rely on lands well below the model's ceiling. If a specific call site
+// regresses on quality we'll bump that one to Sonnet 4.6, not all of them.
 export const MODELS = {
   extract: 'claude-haiku-4-5-20251001',
   score: 'claude-haiku-4-5-20251001',
   summarize: 'claude-haiku-4-5-20251001',
-  reason: 'claude-sonnet-4-6',
+  reason: 'claude-haiku-4-5-20251001',
 } as const

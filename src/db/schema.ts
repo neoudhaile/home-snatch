@@ -196,3 +196,24 @@ export const saved_listings = pgTable(
     pk: uniqueIndex('saved_listings_pk').on(t.listing_id, t.saved_by),
   })
 )
+
+/**
+ * Tracks open Anthropic Message Batches submitted by the bulk-rescore path.
+ * The /api/cron/batch-poll route iterates rows where status='processing',
+ * polls Anthropic, and writes results into `scores` when a batch ends. This
+ * is the cheap-mode rescore lane — Batch API is 50% off Haiku list price.
+ *
+ * `request_count` is the number of listings submitted; `result_count` is what
+ * we've already merged into `scores` (used to retry partial result fetches).
+ */
+export const score_batches = pgTable('score_batches', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  batch_id: text('batch_id').notNull().unique(),
+  status: text('status').notNull().default('processing'),
+  profile_set_hash: text('profile_set_hash').notNull(),
+  request_count: integer('request_count').notNull(),
+  result_count: integer('result_count').notNull().default(0),
+  created_at: timestamp('created_at').defaultNow().notNull(),
+  completed_at: timestamp('completed_at'),
+  error: text('error'),
+})
