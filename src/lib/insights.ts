@@ -334,7 +334,7 @@ export async function generateMarketSummary(): Promise<MarketSummary> {
   try {
     const client = getAnthropic()
     const response = await client.messages.create({
-      model: MODELS.reason,
+      model: MODELS.summarize,
       max_tokens: 1024,
       temperature: 0.3,
       system: [
