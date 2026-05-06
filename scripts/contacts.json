@@ -1,0 +1,466 @@
+{
+  "withEmail": [
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-oh-3pm-renovated-corner-beds/7926396188.html",
+      "title": "OH 1-3PM RENOVATED CORNER 2 BEDS PREWAR ELEV BLDG PRIME SOHO",
+      "price": "$4400.00",
+      "neighborhood": "SoHo",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "google map",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "2129419000",
+        "9178593992",
+        "2129411667"
+      ],
+      "emails": [
+        "xavier@qualityliving.com"
+      ]
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-feew-in-unit5-min-walk-to/7932057013.html",
+      "title": "________NO FEE_____W/D  in unit_______5 min walk to 2,3,4,5,J,Z",
+      "price": "$4650.00",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "google map",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "9179325174",
+        "2124027855",
+        "2124027856"
+      ],
+      "emails": [
+        "leonardo@bouklisgroup.com"
+      ]
+    }
+  ],
+  "withPhoneNoEmail": [
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-bright-east-vil-2br-fun/7928961742.html",
+      "title": "NO FEE Bright East Vil 2BR, fun block, laundry, elevator, yard, VIDEO!",
+      "price": "$4,875",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "5163615142"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-sunny-east-vil-2br-fun/7931751393.html",
+      "title": "NO FEE Sunny East Vil 2BR, fun block, laundry, elevator, yard, VIDEO!",
+      "price": "$4,875",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "5163615142"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-charming-and-bright/7926215343.html",
+      "title": "NO FEE Charming and bright, large 2br, lofty, laundry, VIDEO!",
+      "price": "$4,550",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "5163615142"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-charming-and-bright/7931796561.html",
+      "title": "NO FEE Charming and bright, large 2br, lofty, laundry, VIDEO!",
+      "price": "$4,750",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "5163615142"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-feeamazing-bdr-exposed/7926081136.html",
+      "title": "NO FEE*Amazing 2 bdr* Exposed brick* cozy* great layout",
+      "price": "$4,395",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "6465738017"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-feeamazing-bdr-exposed/7929206281.html",
+      "title": "No Fee*Amazing 2 bdr* Exposed brick*  wd in unit^ blks to Union Square",
+      "price": "$4,150",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "6465738017"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-great-br-exposed-brick/7927720857.html",
+      "title": "No fee *Great 2 BR* Exposed brick* blks to Union Square",
+      "price": "$4,000",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "6465738017"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-no-fee-charming-and-bright/7928390408.html",
+      "title": "NO FEE Charming and bright, large 2br, lofty, laundry, VIDEO!",
+      "price": "$4,450",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "5163615142"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-huge-near-dime-squareincludes/7932039902.html",
+      "title": "HUGE .. NEAR DIME SQUARE....INCLUDES ALL UTILITIES",
+      "price": "$4,400",
+      "neighborhood": "Lower East Side",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "East Broadway",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "2126021137"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-huge-near-dime-squareincludes/7930674112.html",
+      "title": "HUGE .. NEAR DIME SQUARE....INCLUDES ALL UTILITIES",
+      "price": "$4,500",
+      "neighborhood": "Lower East Side",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "East Broadway",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "2126021137"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-duplex-in-hells-kitchen-no-fee/7932195556.html",
+      "title": "Duplex in Hells Kitchen! No Fee! Flexible with Move-in Date",
+      "price": "$4,750",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "9172924891"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-gramercy-low-key-retreat-bed/7931534228.html",
+      "title": "Gramercy! Low-Key retreat 2-Bed/1-Bath",
+      "price": "$4,595",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "East 20th St",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "6468528125"
+      ],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-true-brgreat-dealno-feeonly/7932130321.html",
+      "title": "TRUE 2 BR_GREAT DEAL_NO FEE_ONLY $4195_INTERNATIONALS OK_EASY APPROVAL",
+      "price": "$4,195",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "515",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [
+        "646)4214315"
+      ],
+      "emails": []
+    }
+  ],
+  "noContact": [
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-off-market-sun-washed-les-bed/7928065449.html",
+      "title": "OFF-MARKET SUN WASHED LES 2 BED OASIS___PRIME LOCATION!",
+      "price": "$3,995",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-new-renovated-convertible/7932157388.html",
+      "title": "New Renovated, Convertible 2 Bedroom",
+      "price": "$3,800",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Wall Street",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-bright-convertible-bedroom/7932158539.html",
+      "title": "Bright Convertible 2 Bedroom",
+      "price": "$3,800",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Hanover Square",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-off-market-sun-lit-east-vill/7929590876.html",
+      "title": "OFF-MARKET SUN LIT EAST VILL 2 BED___LAUNDRY BLDG - AMAZING LOCATION!",
+      "price": "$4,595",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "E 3rd St.",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-sun-filled-true-2br-in-prime/7929266120.html",
+      "title": "Sun-Filled True 2BR in Prime Corner Building",
+      "price": "$4,450",
+      "neighborhood": "East Village",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-rare-off-market-bowery/7929590969.html",
+      "title": "RARE OFF-MARKET BOWERY 2 BED___AMAZING LOCATION!",
+      "price": "$4,595",
+      "neighborhood": "Lower East Side",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Bowery",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-off-market-sunny-les-duplex/7926127038.html",
+      "title": "OFF-MARKET SUNNY LES DUPLEX 2 BED + PRIVATE DECK___W/D IN UNIT!!!",
+      "price": "$4,495",
+      "neighborhood": "Lower East Side",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Allen St.",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-off-market-sun-washed-les-bed/7927035953.html",
+      "title": "OFF-MARKET SUN WASHED LES 2 BED + W/D IN UNIT___ELEV/ ROOFDECK BLDG!",
+      "price": "$5,100",
+      "neighborhood": "Lower East Side",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-awesome-2br-hardwood-floors/7928914349.html",
+      "title": "Awesome 2br, Hardwood Floors, Natural Lights",
+      "price": "$4,000",
+      "neighborhood": "Chinatown",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Mott st",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-flex-bedroom-bathroom-luxury/7932414136.html",
+      "title": "Flex 2 Bedroom/ 1 Bathroom Luxury Apartment",
+      "price": "$4,800",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "River Road",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-fantastic-bedroom-east-31st/7931914976.html",
+      "title": "Fantastic 2 Bedroom East 31st Street",
+      "price": "$4,995",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-brand-new-development/7932158389.html",
+      "title": "Brand New Development, Convertible 2 Bed",
+      "price": "$4,095",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "Pearl Street",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    },
+    {
+      "url": "https://newyork.craigslist.org/mnh/apa/d/new-york-top-floorcondo-finishesfree/7931643086.html",
+      "title": "TOP FLOOR=CONDO FINISHES=FREE AMENITIES=DOOR MAN=GOURMET KITCHEN=MASSI",
+      "price": "$4,300",
+      "neighborhood": "SoHo / NoHo / Nolita",
+      "address": {
+        "postalCode": "",
+        "street": "",
+        "city": "",
+        "region": "",
+        "country": "US"
+      },
+      "phones": [],
+      "emails": []
+    }
+  ]
+}
