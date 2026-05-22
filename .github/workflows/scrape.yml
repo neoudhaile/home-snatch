@@ -13,9 +13,12 @@ name: scrape
 # this workflow runs every 2h offset by 30min so they don't collide.
 
 on:
-  schedule:
-    # every 2h at :30 — offset from the Vercel cron at :00
-    - cron: '30 */2 * * *'
+  # Scheduled runs disabled 2026-05-22: this fork has no GitHub Actions secrets
+  # (DATABASE_URL etc.), so every cron run fails in getDb(). Re-enable after
+  # running /onboard and adding repo secrets — just uncomment the block below.
+  # schedule:
+  #   # every 2h at :30 — offset from the Vercel cron at :00
+  #   - cron: '30 */2 * * *'
   workflow_dispatch: # allow manual run from the Actions tab
 
 concurrency:

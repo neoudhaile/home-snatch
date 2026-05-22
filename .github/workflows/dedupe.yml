@@ -6,8 +6,11 @@ name: dedupe
 # in-memory work; no external API calls.
 
 on:
-  schedule:
-    - cron: '0 5 * * *' # 05:00 UTC = 01:00 NYC
+  # Scheduled runs disabled 2026-05-22: this fork has no GitHub Actions secrets
+  # (DATABASE_URL etc.), so every cron run fails in getDb(). Re-enable after
+  # running /onboard and adding repo secrets — just uncomment the block below.
+  # schedule:
+  #   - cron: '0 5 * * *' # 05:00 UTC = 01:00 NYC
   workflow_dispatch:
 
 concurrency:

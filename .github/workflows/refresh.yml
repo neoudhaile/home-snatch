@@ -5,9 +5,12 @@ name: refresh
 # runs more often.
 
 on:
-  schedule:
-    # every hour at :15
-    - cron: '15 * * * *'
+  # Scheduled runs disabled 2026-05-22: this fork has no GitHub Actions secrets
+  # (DATABASE_URL etc.), so every cron run fails in getDb(). Re-enable after
+  # running /onboard and adding repo secrets — just uncomment the block below.
+  # schedule:
+  #   # every hour at :15
+  #   - cron: '15 * * * *'
   workflow_dispatch:
 
 concurrency:
